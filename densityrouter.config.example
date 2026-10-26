@@ -1,0 +1,164 @@
+{
+ "_readme": [
+  "densityrouter central config (JSON). Copy this file to densityrouter.config (git-ignored) and fill it in,",
+  "or point $DENSITYROUTER_CONFIG at your copy. Keys starting with _ are comments.",
+  "Relative paths resolve under the repo folder; ~ expands to the home of the user who runs the router.",
+  "Never put tokens, passwords or API keys here: each CLI keeps its own login.",
+  "Whoever fills this in (a person or an agent): replace every <...> value, keep the key names, run the test suite after."
+ ],
+ "paths": {
+  "_state_dir": "LIVE flag, leases, pending jobs, dispatch.log, usage-ledger.jsonl. Env DISPATCH_STATE wins.",
+  "state_dir": "state",
+  "_go_ledger": "Markdown ledger with one 'GO' line per approved packet (name + sha12). Default of --ledger.",
+  "go_ledger": "ledger/GO-LEDGER.md",
+  "_runs": "RUNS.tsv: one line per packet run; the dry run only checks that a line naming the packet file exists. Default of --runs.",
+  "runs": "ledger/RUNS.tsv",
+  "_ip_schema": "Optional LAN schema markdown with a 'Static assignments' table; host role names come from it. Env DISPATCH_IP_SCHEMA wins.",
+  "ip_schema": "lan/IP-SCHEME.md",
+  "_usage_dir": "Usage snapshots <harness>.json and counters. Env DISPATCH_USAGE_DIR wins.",
+  "usage_dir": "usage",
+  "_packets_dir": "Folder of packet .md files (used by dispatcher.corpus()).",
+  "packets_dir": "packets"
+ },
+ "harnesses": {
+  "_doc": [
+   "One entry per CLI harness. File order is the fallback order for entries with route=true.",
+   "bin: absolute or ~ path of the CLI. bin_env: env var allowed to override bin, only with a path in allow_bins.",
+   "invoke: argv for a routed call; {bin} and {prompt} are filled in. null = no invoke path (NOT_DISPATCHED).",
+   "request_argv: argv for usage_layer run (machine-readable output if the CLI has it).",
+   "timeout_s: per-call timeout (null = 60). async: result arrives later as a receipt file.",
+   "usage.parser: name of the /usage parser in usage_layer.py (grok, cursor, agy); a new CLI format needs a parser.",
+   "usage.reader_cwd: folder the CLI already trusts, used to read /usage.",
+   "account and subscription: labels only, for humans (which login and plan this CLI uses). No secrets.",
+   "run_host: local or ssh to a role-named host (see _run_host). Changing where the CLIs live is a config change only.",
+   "Label-only keys (shown in output, never change routing): owner, off, account, subscription, desktop_only, host, route_via, usage.source, usage.report_step, usage.reset_tz_source. run_host is the only key that decides where a CLI runs."
+  ],
+  "grok-build": {
+   "route": true,
+   "bin": "~/.grok/bin/grok",
+   "bin_env": "GROK_BUILD_BIN",
+   "allow_bins": [],
+   "invoke": [
+    "{bin}",
+    "-p",
+    "{prompt}"
+   ],
+   "request_argv": [
+    "{bin}",
+    "-p",
+    "{prompt}"
+   ],
+   "timeout_s": null,
+   "async": false,
+   "pool": "grok-build",
+   "usage": {
+    "parser": "grok",
+    "primary": "weekly",
+    "source": "grok (interactive) /usage",
+    "report_step": 1.0,
+    "reset_tz_source": "printed absolute 'Resets: <Mon> <d>, HH:MM' in the host's local zone (router host clock)",
+    "reader_cwd": null
+   },
+   "owner": "<owner>",
+   "off": "KILL file",
+   "desktop_only": false,
+   "host": "<host-label>",
+   "route_via": "<label>",
+   "account": "<login label>",
+   "subscription": "<plan name>",
+   "_run_host": "Where this CLI runs. local = this machine. ssh = on a role-named host, e.g. {\"mode\": \"ssh\", \"host\": \"<cli-host-role>\", \"ssh_opts\": [\"-o\", \"BatchMode=yes\", \"-J\", \"<jump-host-role>\"], \"remote_cwd\": \"<trusted dir on that host>\"}. bin, request_argv and usage.reader_cwd are then paths on that host.",
+   "run_host": {
+    "mode": "local"
+   }
+  },
+  "cursor": {
+   "route": true,
+   "bin": "~/.local/bin/cursor-agent",
+   "bin_env": "CURSOR_AGENT_BIN",
+   "allow_bins": [],
+   "invoke": [
+    "{bin}",
+    "-p",
+    "--trust",
+    "--output-format",
+    "text",
+    "--",
+    "{prompt}"
+   ],
+   "request_argv": [
+    "{bin}",
+    "-p",
+    "--trust",
+    "--output-format",
+    "json",
+    "--",
+    "{prompt}"
+   ],
+   "timeout_s": 180,
+   "async": false,
+   "pool": "cursor",
+   "usage": {
+    "parser": "cursor",
+    "primary": "included",
+    "source": "cursor-agent (interactive) /usage",
+    "report_step": 1.0,
+    "reset_tz_source": "printed date only 'Resets <Mon> <d>' (no time, no zone); treated as 00:00 UTC, flagged date-only",
+    "reader_cwd": "<folder cursor-agent already trusts>"
+   },
+   "owner": "<owner>",
+   "off": "KILL file",
+   "account": "<login label>",
+   "subscription": "<plan name>",
+   "_run_host": "Where this CLI runs. local = this machine. ssh = on a role-named host, e.g. {\"mode\": \"ssh\", \"host\": \"<cli-host-role>\", \"ssh_opts\": [\"-o\", \"BatchMode=yes\", \"-J\", \"<jump-host-role>\"], \"remote_cwd\": \"<trusted dir on that host>\"}. bin, request_argv and usage.reader_cwd are then paths on that host.",
+   "run_host": {
+    "mode": "local"
+   }
+  },
+  "agy-gemini": {
+   "route": true,
+   "bin": "~/.local/bin/agy",
+   "bin_env": null,
+   "allow_bins": [],
+   "invoke": [
+    "{bin}",
+    "-p",
+    "{prompt}"
+   ],
+   "request_argv": [
+    "{bin}",
+    "-p",
+    "{prompt}"
+   ],
+   "timeout_s": null,
+   "async": false,
+   "pool": "agy-gemini",
+   "usage": {
+    "parser": "agy",
+    "primary": "<agy meter name>.weekly",
+    "source": "agy (interactive) /usage",
+    "report_step": 0.01,
+    "reset_tz_source": "printed relative 'Refreshes in Hh Mm', added to the read time (router host clock)",
+    "reader_cwd": "<folder agy already trusts>"
+   },
+   "owner": "<owner>",
+   "off": "KILL file",
+   "account": "<login label>",
+   "subscription": "<plan name>",
+   "_run_host": "Where this CLI runs. local = this machine. ssh = on a role-named host, e.g. {\"mode\": \"ssh\", \"host\": \"<cli-host-role>\", \"ssh_opts\": [\"-o\", \"BatchMode=yes\", \"-J\", \"<jump-host-role>\"], \"remote_cwd\": \"<trusted dir on that host>\"}. bin, request_argv and usage.reader_cwd are then paths on that host.",
+   "run_host": {
+    "mode": "local"
+   }
+  }
+ },
+ "lan": {
+  "_doc": "A packet whose declared Objective/Hosts names a LAN host role from paths.ip_schema goes ONLY to this harness (hard rule). null = LAN work is never routed.",
+  "harness": null
+ },
+ "log_only_pools": {
+  "_doc": "Usage pools that are logged but never routed, e.g. {\"<pool-name>\": {\"pool\": \"<pool-name>\"}}. Empty by default."
+ },
+ "ssh": {
+  "_doc": "Used only by harnesses whose run_host.mode is ssh. bin: ssh client (name on PATH or absolute path).",
+  "bin": "ssh"
+ }
+}

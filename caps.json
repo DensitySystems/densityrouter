@@ -1,0 +1,17 @@
+{
+  "grok-build": {
+    "enabled": true,
+    "used_today": 0,
+    "note": "No limits: the owner never placed caps. Add test_call_cap (positive int) only if the owner sets one."
+  },
+  "cursor": {
+    "enabled": true,
+    "used_today": 0,
+    "note": "No limits: the owner never placed caps. Add test_call_cap (positive int) only if the owner sets one."
+  },
+  "agy-gemini": {
+    "enabled": true,
+    "used_today": 0,
+    "note": "No limits: the owner never placed caps. Add test_call_cap (positive int) only if the owner sets one."
+  }
+}

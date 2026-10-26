@@ -1,0 +1,20 @@
+{
+ "grok-build": {
+  "code_edit": 0.9,
+  "refactor": 0.8,
+  "research": 0.6,
+  "browser": 0.2
+ },
+ "cursor": {
+  "code_edit": 0.9,
+  "refactor": 0.9,
+  "research": 0.5,
+  "browser": 0.1
+ },
+ "agy-gemini": {
+  "code_edit": 0.7,
+  "refactor": 0.6,
+  "research": 0.9,
+  "browser": 0.3
+ }
+}
