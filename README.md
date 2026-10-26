@@ -15,23 +15,6 @@ Harnesses shipped in the example config: `grok-build` (Grok Build CLI `grok`), `
 
 Default is OFFLINE (dry run): it prints what it would send and makes zero calls.
 
-## Glossary
-| term | meaning |
-|---|---|
-| packet | a markdown file describing one job; its `Objective:` line is what gets classified |
-| GO ledger | a markdown file; a packet is approved only if some line contains `\| GO \|`, the packet file name and the packet's sha12 |
-| sha12 | first 12 hex of the packet's sha256: `sha256sum <packet> \| cut -c1-12` |
-| RUNS | a TSV file; the packet needs a row containing its path or file name |
-| harness | one AI CLI entry in `densityrouter.config` (`harnesses.<name>`) |
-| route candidate | a harness with `"route": true`; file order is the fallback order |
-| pool | the usage allowance a harness draws from (its `/usage` meter); each harness has its own pool |
-| subscription | label-only text naming the plan a CLI is logged in with |
-| lease | a file `<state-dir>/leases/<job>.json` held while a job is in flight (default 600 s); a second router cannot take the same job until release, expiry or a confirmed kill |
-| HOLD | a check failed; nothing was sent (exit 2, or 7 for a refused pin) |
-| PENDING | an async harness accepted the job; the result arrives later as a receipt file (exit 0) |
-| NOT_DISPATCHED | the harness has no `invoke` (null); unpinned routing falls back to the next candidate |
-| owner | label-only text in a harness entry (who maintains it); not used for routing |
-
 ## Install prerequisites
 - Python 3, standard library only (no `pip install`). Tested on CPython 3.13.5 and 3.14.4; older versions are untested.
 - Linux (usage reads use a pseudo-terminal and `/proc`).
