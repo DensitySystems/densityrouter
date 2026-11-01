@@ -1,6 +1,6 @@
 """Live wiring: live caller behind DISPATCH_LIVE (default OFF). FAKE harness only:
 real harness_call.call is monkeypatched to fail loudly if touched. DISPATCH_LIVE=1 appears only in
-per-test env dicts passed to live.run(); os.environ is never set. Temp ledger/runs/state/KILL only."""
+per-test env dicts passed to live.run(); os.environ is never set. Temp state/KILL only."""
 import json, os, shutil, subprocess, sys, tempfile, unittest
 sys.dont_write_bytecode = True
 import os as _os; _os.environ["DENSITYROUTER_CONFIG"] = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "fixtures", "test.config"); assert _os.environ["DENSITYROUTER_CONFIG"].endswith(_os.path.join("fixtures", "test.config"))
@@ -18,10 +18,6 @@ class Live(unittest.TestCase):
         self.pk = os.path.join(self.t, "PACKET-WIRE-FAKE-r1.md")
         with open(self.pk, "w") as f:
             f.write("# PACKET: fake\n\n## Objective\nFix a script in the scratch dir.\n")
-        s12 = D.sha256f(self.pk)[:12]
-        self.ledger = os.path.join(self.t, "ledger.md"); self.runs = os.path.join(self.t, "RUNS.tsv")
-        with open(self.ledger, "w") as f: f.write(f"| 1 | GO | PACKET-WIRE-FAKE-r1.md {s12} |\n")
-        with open(self.runs, "w") as f: f.write(f"x\t{self.pk}\n")
         self.capmap = D.load(os.path.join(ROOT, "capability-map.json"))
         self.caps = {"grok-build": {"enabled": True}, "cursor": {"enabled": False}, "agy-gemini": {"enabled": False}, "async-fake": {"enabled": False}}
         self.calls = []
@@ -40,7 +36,7 @@ class Live(unittest.TestCase):
         self.calls.append((h, job)); return {"harness": h, "status": "done", "stdout": "OK"}
     def go(self, env, **kw):
         env = dict(env); env.setdefault("DISPATCH_STATE", os.environ["DISPATCH_STATE"])  # temp state only
-        return LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps, env=env, **kw)
+        return LV.run(self.pk, self.capmap, self.caps, env=env, **kw)
 
     def test_flag_off_zero_calls(self):
         for env in ({}, {"DISPATCH_LIVE": ""}, {"DISPATCH_LIVE": "0"}, {"DISPATCH_LIVE": "true"}, {"DISPATCH_LIVE": " 1"}, {"DISPATCH_LIVE": "yes"}):
@@ -49,7 +45,7 @@ class Live(unittest.TestCase):
             self.assertEqual(out["handoff"]["status"], "WOULD DISPATCH (dry-run, nothing sent)")
         self.assertEqual(self.calls, [])
     def test_flag_off_matches_dry_run(self):
-        ok, ref, _ = D.dry_run(self.pk, self.ledger, self.runs, self.capmap, self.caps)
+        ok, ref, _ = D.dry_run(self.pk, self.capmap, self.caps)
         rc, out = self.go({}); out.pop("mode"); self.assertEqual(out, ref)
     def test_flag_on_fake_exactly_one_routed_call(self):
         rc, out = self.go(ON, call_fn=self.fake)
@@ -64,11 +60,11 @@ class Live(unittest.TestCase):
         open(D.KILL, "w").close()
         with self.assertRaises(SystemExit) as e: self.go(ON, call_fn=self.fake)
         self.assertEqual(e.exception.code, 3); self.assertEqual(self.calls, [])
-    def test_hold_when_no_go(self):
-        open(self.ledger, "w").close()
-        rc, out = self.go(ON, call_fn=self.fake); self.assertEqual((rc, self.calls), (2, []))
+    def test_no_approval_file_needed(self):
+        # No GO ledger or RUNS file exists anywhere: the packet still routes (the former file gate is removed).
+        rc, out = self.go(ON, call_fn=self.fake); self.assertEqual((rc, len(self.calls)), (0, 1))
     def test_lease_held_by_other_holds(self):
-        ok, ref, _ = D.dry_run(self.pk, self.ledger, self.runs, self.capmap, self.caps)
+        ok, ref, _ = D.dry_run(self.pk, self.capmap, self.caps)
         D.lease_acquire(ref["handoff"]["job"], "other-owner")
         rc, out = self.go(ON, call_fn=self.fake); self.assertEqual((rc, self.calls), (2, []))
     def test_redaction_on_call_output(self):

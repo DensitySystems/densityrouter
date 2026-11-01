@@ -1,4 +1,4 @@
-"""Tests: N1, LOW, GO strictness, KILL-first, timeouts, exit map, redaction of harness output, caps.
+"""Tests: N1, LOW, KILL-first, timeouts, exit map, redaction of harness output, caps.
 Harness calls here use LOCAL STUB commands (python3/sleep) only; no real harness calls."""
 import io, json, os, subprocess, sys, tempfile, unittest, warnings
 sys.dont_write_bytecode = True
@@ -8,7 +8,7 @@ import dispatcher as D, harness_call as HC
 CAP = D.load(os.path.join(ROOT, "capability-map.json")); CAPS = D.load(os.path.join(ROOT, "caps.json"))
 PY = sys.executable
 import drconfig as _C
-PK = (_C.path("packets_dir") or "") + "/"; LEDGER = _C.path("go_ledger"); RUNS = _C.path("runs")
+PK = (_C.path("packets_dir") or "") + "/"
 
 N1_PINNED = "packets=180 lan_before=113 lan_after=25 browser_jobs_before=24 browser_jobs_after=1 browser_forced_before=21 browser_forced_after=1"
 
@@ -37,18 +37,6 @@ class DE(unittest.TestCase):
             warnings.simplefilter("error", ResourceWarning)
             ok, m = D.lease_release("j", None, kill_confirmed=True)
         self.assertTrue(ok); self.assertTrue(D.load(os.path.join(self.tmp, "leases/j.json"))["kill_confirmed"])
-    # GO strictness
-    def _ledger(self, line):
-        p = os.path.join(self.tmp, "L.md"); 
-        with open(p, "w") as f: f.write(line + "\n")
-        return p
-    def test_go_filename_and_sha12_required(self):
-        n = "PACKET-X-20261024.md"
-        self.assertEqual(D.find_go(self._ledger(f"t | GO | {n} sha abcdef123456 | x"), "abcdef123456", n)[0], 1)
-        self.assertIsNone(D.find_go(self._ledger("t | GO | some eval abcdef123456 | x"), "abcdef123456", n)[0])      # sha-only
-        self.assertIsNone(D.find_go(self._ledger(f"t | GO | {n} sha abcdef12345 | x"), "abcdef123456", n)[0])       # 11 chars
-        self.assertIsNone(D.find_go(self._ledger(f"t | GO | {n} sha abcdef1234567 | x"), "abcdef123456", n)[0])     # longer token
-        self.assertIsNone(D.find_go(self._ledger(f"t | GO | PACKET-X-20261024-r2.md abcdef123456"), "abcdef123456", n)[0])  # other file
     # KILL first, every tool
     # timeout + exit map
     def test_timeout_enforced(self):

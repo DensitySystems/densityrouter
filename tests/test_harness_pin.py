@@ -53,15 +53,10 @@ class HarnessPin(unittest.TestCase):
         self.calls = []
         path = os.path.join(self.tmp, name)
         with open(path, "w", encoding="utf-8") as f: f.write(text)
-        sha12 = D.sha256f(path)[:12]
-        ledger = os.path.join(self.tmp, name + ".ledger")
-        runs = os.path.join(self.tmp, name + ".runs")
-        with open(ledger, "w", encoding="utf-8") as f: f.write("| 1 | GO | %s %s |\n" % (name, sha12))
-        with open(runs, "w", encoding="utf-8") as f: f.write("x\t%s\n" % path)
         kw = {"env": {"DISPATCH_LIVE": "1", "DISPATCH_STATE": self.tmp},
               "call_fn": self._call}
         if not omit_pin: kw["pin"] = pin
-        rc, out = LV.run(path, ledger, runs, self.capmap, self.caps if caps is None else caps, **kw)
+        rc, out = LV.run(path, self.capmap, self.caps if caps is None else caps, **kw)
         return rc, out, path
 
     def test_pin_honored(self):

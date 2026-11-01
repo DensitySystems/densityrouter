@@ -99,26 +99,19 @@ class Phase7Carryovers(unittest.TestCase):
         text = "# PACKET: p7 %s\n\nObjective: %s\n" % (sid, objective)
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
-        sha12 = D.sha256f(path)[:12]
-        ledger = os.path.join(self.tmp, "ledger-%s.md" % sid)
-        runs = os.path.join(self.tmp, "RUNS-%s.tsv" % sid)
-        with open(ledger, "w", encoding="utf-8") as f:
-            f.write("| 1 | GO | %s %s |\n" % (name, sha12))
-        with open(runs, "w", encoding="utf-8") as f:
-            f.write("x\t%s\n" % path)
-        return path, ledger, runs
+        return path
 
-    def _live(self, path, ledger, runs, call_fn, pin=None):
+    def _live(self, path, call_fn, pin=None):
         env = {"DISPATCH_LIVE": "1", "DISPATCH_STATE": os.environ["DISPATCH_STATE"]}
         self.assertNotEqual(os.environ.get("DISPATCH_LIVE"), "1")
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "LIVE")))
-        return LV.run(path, ledger, runs, self.capmap, self.caps, env=env,
+        return LV.run(path, self.capmap, self.caps, env=env,
                       call_fn=call_fn, pin=pin)
 
     def test_c1_not_dispatched_walks_on_to_callable(self):
         # No snapshots: refactor ability puts cursor first. The fake returns NOT_DISPATCHED
         # for that harness only; the next harness is a fake done. Cursor's real invoke path stays.
-        path, ledger, runs = self._bundle(
+        path = self._bundle(
             "Refactor the repo-wide helpers.", "Grok Build: c1", "feed0100")
         seen = []
 
@@ -128,7 +121,7 @@ class Phase7Carryovers(unittest.TestCase):
                 return {"harness": h, "status": "NOT_DISPATCHED", "reason": "no invoke path on this host"}
             return {"harness": h, "status": "done"}
 
-        rc, out = self._live(path, ledger, runs, call_fn)
+        rc, out = self._live(path, call_fn)
         self.assertNotIn("NOT_DISPATCHED", D.WALK_STATUSES)
         self.assertIn("NOT_DISPATCHED", LV.LIVE_WALK)
         self.assertEqual(out["route"]["task_type"], "refactor")
@@ -143,7 +136,7 @@ class Phase7Carryovers(unittest.TestCase):
     def test_c1_real_cursor_call_result_walks_on(self):
         # Cursor's production invoke path is real. Clear that one template, call the
         # real harness_call.call, and restore it. subprocess.run stays the setUp raise.
-        path, ledger, runs = self._bundle(
+        path = self._bundle(
             "Refactor the repo-wide helpers.", "Grok Build: c1real", "feed0101")
         saved = HC.INVOKE["cursor"]
         self.assertIsNotNone(saved)
@@ -161,7 +154,7 @@ class Phase7Carryovers(unittest.TestCase):
                     return res
                 return {"harness": h, "status": "done"}
 
-            rc, out = self._live(path, ledger, runs, call_fn)
+            rc, out = self._live(path, call_fn)
             self.assertEqual(rc, 0, out["handoff"]["status"])
             self.assertEqual(seen, ["cursor", "grok-build"])
             self.assertEqual(out["handoff"]["walked"][0], "cursor")
@@ -180,7 +173,7 @@ class Phase7Carryovers(unittest.TestCase):
         self.assertIs(HC.INVOKE["cursor"], saved)
 
     def test_c1_all_uncallable_exits_6(self):
-        path, ledger, runs = self._bundle(
+        path = self._bundle(
             "Refactor the repo-wide helpers.", "Grok Build: c1all", "feed0102")
         seen = []
 
@@ -188,7 +181,7 @@ class Phase7Carryovers(unittest.TestCase):
             seen.append(h)
             return {"harness": h, "status": "NOT_DISPATCHED", "reason": "no invoke path on this host"}
 
-        rc, out = self._live(path, ledger, runs, call_fn)
+        rc, out = self._live(path, call_fn)
         self.assertEqual(rc, 6)
         self.assertEqual(seen, ["cursor", "grok-build", "agy-gemini"])
         self.assertEqual(out["handoff"]["walked"], seen)
@@ -197,7 +190,7 @@ class Phase7Carryovers(unittest.TestCase):
         self.assertNotIn(out["call"]["status"], ("done", "PENDING"))
 
     def test_c1_pinned_uncallable_exits_6_pin_only(self):
-        path, ledger, runs = self._bundle(
+        path = self._bundle(
             "Refactor the repo-wide helpers.", "Cursor: pin-only", "c0c0c0c0")
         seen = []
 
@@ -205,7 +198,7 @@ class Phase7Carryovers(unittest.TestCase):
             seen.append(h)
             return {"harness": h, "status": "NOT_DISPATCHED", "reason": "no invoke path on this host"}
 
-        rc, out = self._live(path, ledger, runs, call_fn, pin="cursor")
+        rc, out = self._live(path, call_fn, pin="cursor")
         self.assertEqual(rc, 6, out["handoff"]["status"])
         self.assertEqual(seen, ["cursor"])
         self.assertEqual(out["handoff"]["walked"], ["cursor"])
@@ -446,7 +439,7 @@ class Phase7Carryovers(unittest.TestCase):
         self.assertNotIn("grok-build", [h for h, _why in r["skipped"]])
 
     def test_pinned_failure_exits_6_pin_only(self):
-        path, ledger, runs = self._bundle(
+        path = self._bundle(
             "Fix the build script.", "Grok Build: pin-fail", "feed0103")
         seen = []
 
@@ -454,7 +447,7 @@ class Phase7Carryovers(unittest.TestCase):
             seen.append(h)
             return {"harness": h, "status": "failed_retryable"}
 
-        rc, out = self._live(path, ledger, runs, call_fn, pin="grok-build")
+        rc, out = self._live(path, call_fn, pin="grok-build")
         self.assertEqual(rc, 6, out["handoff"]["status"])
         self.assertEqual(seen, ["grok-build"])
         self.assertEqual(out["handoff"]["walked"], ["grok-build"])

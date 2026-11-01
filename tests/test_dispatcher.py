@@ -4,7 +4,7 @@ import os as _os; _os.environ["DENSITYROUTER_CONFIG"] = _os.path.join(_os.path.d
 sys.path.insert(0, ROOT); import dispatcher as D
 CAP = D.load(os.path.join(ROOT, "capability-map.json")); CAPS = D.load(os.path.join(ROOT, "caps.json"))
 import drconfig as _C
-PK = (_C.path("packets_dir") or "") + "/"; LEDGER = _C.path("go_ledger"); RUNS = _C.path("runs")
+PK = (_C.path("packets_dir") or "") + "/"
 PAST = ["PACKET-EXAMPLE-A.md", "PACKET-EXAMPLE-B.md", "PACKET-EXAMPLE-C.md"]
 
 class T(unittest.TestCase):

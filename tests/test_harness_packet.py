@@ -149,16 +149,12 @@ class HarnessPacket(unittest.TestCase):
         pk = os.path.join(self.tmp, "PACKET-PKT-r1.md")
         with open(pk, "w") as f:
             f.write("# PACKET: pkt\n\n## Objective\nFix a script in the scratch dir.\n")
-        sha12 = D.sha256f(pk)[:12]
-        ledger = os.path.join(self.tmp, "ledger.md"); runs = os.path.join(self.tmp, "RUNS.tsv")
-        with open(ledger, "w") as f: f.write("| 1 | GO | PACKET-PKT-r1.md %s |\n" % sha12)
-        with open(runs, "w") as f: f.write("x\t%s\n" % pk)
         seen = []
         def fake(h, job=None, packet=None, **k):
             seen.append(packet); return {"harness": h, "status": "done", "stdout": "OK"}
         capmap = D.load(os.path.join(ROOT, "capability-map.json"))
         caps = {"grok-build": {"enabled": True}, "cursor": {"enabled": False}, "agy-gemini": {"enabled": False}, "async-fake": {"enabled": False}}
-        rc, out = LV.run(pk, ledger, runs, capmap, caps, env={"DISPATCH_LIVE": "1", "DISPATCH_STATE": self.tmp},
+        rc, out = LV.run(pk, capmap, caps, env={"DISPATCH_LIVE": "1", "DISPATCH_STATE": self.tmp},
                          call_fn=fake)
         self.assertEqual(rc, 0, out)
         self.assertEqual(seen, [pk])

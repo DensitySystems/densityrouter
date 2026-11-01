@@ -57,15 +57,10 @@ class Harness1D(unittest.TestCase):
         self.calls = []
         path = os.path.join(self.tmp, name)
         with open(path, "w", encoding="utf-8") as f: f.write(text)
-        sha12 = D.sha256f(path)[:12]
-        ledger = os.path.join(self.tmp, name + ".ledger")
-        runs = os.path.join(self.tmp, name + ".runs")
-        with open(ledger, "w", encoding="utf-8") as f: f.write("| 1 | GO | %s %s |\n" % (name, sha12))
-        with open(runs, "w", encoding="utf-8") as f: f.write("x\t%s\n" % path)
         kw = {"env": self._env_live(live),
               "call_fn": self._call}
         if not omit_pin: kw["pin"] = pin
-        rc, out = LV.run(path, ledger, runs, self.capmap, self.caps, **kw)
+        rc, out = LV.run(path, self.capmap, self.caps, **kw)
         return rc, out, path
     def _assert_nothing_sent(self):
         self.assertEqual(self.calls, [])

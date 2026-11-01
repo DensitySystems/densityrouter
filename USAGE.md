@@ -2,7 +2,7 @@
 
 densityrouter by Density Systems (densitylabs.tech) - grok@densitylabs.tech - @densitylabsHQ
 
-All commands run from `<dispatcher-dir>` with `python3`. Placeholders: `<dispatcher-dir>` (where the code lives), `<state-dir>` (`$DISPATCH_STATE`, else `paths.state_dir` from the config), `<ledger>` (GO ledger markdown), `<runs>` (RUNS TSV).
+All commands run from `<dispatcher-dir>` with `python3`. Placeholders: `<dispatcher-dir>` (where the code lives), `<state-dir>` (`$DISPATCH_STATE`, else `paths.state_dir` from the config).
 
 ## Config
 All paths, hosts and harness settings come from `densityrouter.config` (see README "The config"). Quick start:
@@ -35,7 +35,7 @@ Each variable below overrides the matching config value for that one process onl
 
 Objective: Fix the parser script in the scratch dir.
 ```
-Write the Objective as an inline `Objective: ...` line (a `## Objective` heading is not read as the Objective). The task type comes from the Objective line (browser / research / refactor / code_edit). The GO ledger needs a line containing `| GO |`, the packet name and the first 12 hex of the packet's sha256, e.g. `| 12 | GO | PACKET-example.md <sha12> |`. The RUNS file needs a line containing the packet path or file name.
+Write the Objective as an inline `Objective: ...` line (a `## Objective` heading is not read as the Objective). The task type comes from the Objective line (browser / research / refactor / code_edit). A packet needs no approval file: routing checks only the hard rules (KILL file, LAN rule, leases, secret patterns). `--ledger` and `--runs` are still accepted and ignored, so older command lines keep working.
 
 ## dispatcher.py
 ```
@@ -43,14 +43,14 @@ python3 dispatcher.py adapters                         # harness owner labels an
 python3 dispatcher.py capmap cursor                    # ability row for a harness (or a task type)
 python3 dispatcher.py usage-snapshot [--usage-dir D]
 python3 dispatcher.py route-choose <packet> [--usage-dir D]       # ranking, stdout only
-python3 dispatcher.py dispatch --dry-run <packet> --ledger <ledger> --runs <runs> [--usage-dir D]
-python3 dispatcher.py live <packet> --ledger <ledger> --runs <runs> [--usage-dir D] [--harness <h>]
+python3 dispatcher.py dispatch --dry-run <packet> [--usage-dir D]
+python3 dispatcher.py live <packet> [--usage-dir D] [--harness <h>]
 ```
 `dispatch --dry-run` exits 0 ok, 2 HOLD, 3 KILLED, 8 packet redaction hits, 9 config missing. It never calls a CLI, even when live is on.
 
 ## live.py
 ```
-python3 live.py <packet> --ledger <ledger> --runs <runs> [--usage-dir D] [--harness <h>]
+python3 live.py <packet> [--usage-dir D] [--harness <h>]
 python3 live.py --off                                   # rollback: remove <state-dir>/LIVE
 ```
 Offline (default) it prints the handoff it would send and makes no calls. Live, it takes a lease, calls the chosen harness (falling back to the next on retryable failures), reads usage before/after, releases the lease, and prints JSON.
@@ -61,10 +61,10 @@ Exit codes: 0 done (or real PENDING, or offline would-dispatch); 2 HOLD; 3 KILLE
 Examples:
 ```
 # offline run: makes no calls only while live is off (no DISPATCH_LIVE=1 and no <state-dir>/LIVE); use dispatch --dry-run to be sure
-python3 live.py packets/PACKET-example.md --ledger <ledger> --runs <runs>
+python3 live.py packets/PACKET-example.md
 
 # one live run in one process, temp state, nothing global
-DISPATCH_STATE=$(mktemp -d) DISPATCH_LIVE=1 python3 live.py packets/PACKET-example.md --ledger <ledger> --runs <runs> --harness cursor
+DISPATCH_STATE=$(mktemp -d) DISPATCH_LIVE=1 python3 live.py packets/PACKET-example.md --harness cursor
 
 # turn live on for everyone using <state-dir>, then off
 touch <state-dir>/LIVE
@@ -96,6 +96,6 @@ python3 harness_call.py <harness>     # one contract test call; prints the JSON 
 
 ## Tests
 ```
-python3 -m unittest discover -s tests     # expected: Ran 286 tests, OK
+python3 -m unittest discover -s tests     # expected: Ran 295 tests, OK
 ```
 Prerequisites: Python 3, git, coreutils (sha256sum, mktemp).

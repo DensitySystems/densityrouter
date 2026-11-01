@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Dispatcher: routing, approval checks, leases, redaction and the command line.
-The dispatcher itself sends nothing (live.py does), never approves a packet and never writes the GO ledger. Standard library only.
+"""Dispatcher: routing, leases, redaction and the command line.
+The dispatcher itself sends nothing (live.py does) and reads no approval file. Standard library only.
 
 Precedence, applied in this order everywhere:
   1. hard rules: KILL file, LAN rule (LAN work -> lan.harness only), lease
@@ -697,31 +697,17 @@ def route(text, capmap, caps, udir=None, health=None, job=None, now=None, cooldo
     return out
 
 # ---------- dry-run ----------
-def find_go(ledger, sha12, name):
-    with open(ledger) as f:
-        for i, l in enumerate(f, 1):
-            if "| GO |" in l and re.search(r"(?<![0-9a-f])" + re.escape(sha12) + r"(?![0-9a-f])", l) and re.search(r"(?<![\w.-])" + re.escape(name.replace(".md", "")) + r"(?:\.md)?(?![\w-])", l): return i, l.strip()
-    return None, None
-
-def find_runs(runs, path):
-    with open(runs) as f:
-        for l in f:
-            if path in l or os.path.basename(path) in l: return l.strip()
-    return None
-
-def dry_run(packet, ledger, runs, capmap, caps, udir=None):
+def dry_run(packet, capmap, caps, udir=None):
     check_kill()
     sha = sha256f(packet); name = os.path.basename(packet)
     with open(packet) as f: text = f.read()
-    gl, gline = find_go(ledger, sha[:12], name)
-    rrow = find_runs(runs, packet)
     job = hashlib.sha256((sha + ":run").encode()).hexdigest()[:16]  # idempotency key
     r = route(text, capmap, caps, udir, job=job)
-    ok = bool(gl and rrow and r["ranked"])
+    ok = bool(r["ranked"])
     handoff = {"would_send_to": r["ranked"][0]["harness"] if r["ranked"] else None,
-               "packet": packet, "packet_sha": sha, "job": job, "go_line": gl,
+               "packet": packet, "packet_sha": sha, "job": job,
                "status": "WOULD DISPATCH (dry-run, nothing sent)" if ok else "HOLD"}
-    out, hits = redact({"handoff": handoff, "route": r, "runs_row_found": bool(rrow)})
+    out, hits = redact({"handoff": handoff, "route": r})
     return ok, out, hits
 
 def main():
@@ -731,10 +717,10 @@ def main():
     a = sp.add_parser("capmap"); a.add_argument("key")
     a = sp.add_parser("route-choose"); a.add_argument("packet"); a.add_argument("--usage-dir")
     a = sp.add_parser("dispatch"); a.add_argument("packet"); a.add_argument("--dry-run", action="store_true", required=True)
-    a.add_argument("--ledger", default=C.path("go_ledger")); a.add_argument("--runs", default=C.path("runs")); a.add_argument("--usage-dir")
+    a.add_argument("--ledger", help=argparse.SUPPRESS); a.add_argument("--runs", help=argparse.SUPPRESS); a.add_argument("--usage-dir")
     a = sp.add_parser("adapters")
     a = sp.add_parser("live", help="live caller; offline unless env DISPATCH_LIVE is exactly 1 or <state-dir>/LIVE exists")
-    a.add_argument("packet"); a.add_argument("--ledger", default=C.path("go_ledger")); a.add_argument("--runs", default=C.path("runs")); a.add_argument("--usage-dir")
+    a.add_argument("packet"); a.add_argument("--ledger", help=argparse.SUPPRESS); a.add_argument("--runs", help=argparse.SUPPRESS); a.add_argument("--usage-dir")
     a.add_argument("--harness", help="tests and operator use only: pin this harness after full checks; refusal exits 7; unset leaves routing unchanged")
     x = ap.parse_args(); check_kill()
     capmap = load(os.path.join(HERE, "capability-map.json")); caps = load(os.path.join(HERE, "caps.json"))
@@ -751,13 +737,13 @@ def main():
         print("PRECEDENCE: hard rules -> score -> fallback (tie/unknown only)")
         print(json.dumps(r, indent=1))
     elif x.cmd == "dispatch":
-        ok, out, hits = dry_run(x.packet, x.ledger, x.runs, capmap, caps, x.usage_dir)
+        ok, out, hits = dry_run(x.packet, capmap, caps, x.usage_dir)
         if out["route"]["phase1"]: print(PHASE1_NOTE)
         print(json.dumps(out, indent=1)); print(f"redaction_hits={hits}")
         sys.exit(0 if ok else 2)
     elif x.cmd == "live":
         import live as LV  # lazy: offline commands never import the live path
-        rc, out = LV.run(x.packet, x.ledger, x.runs, capmap, caps, x.usage_dir, pin=x.harness)
+        rc, out = LV.run(x.packet, capmap, caps, x.usage_dir, pin=x.harness)
         print(json.dumps(out, indent=1)); sys.exit(rc)
     elif x.cmd == "adapters":
         print(json.dumps(ADAPTERS, indent=1)); print(f"global kill file: {KILL}")

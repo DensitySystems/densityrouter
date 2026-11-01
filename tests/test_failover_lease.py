@@ -40,13 +40,6 @@ class FailoverLease(unittest.TestCase):
         self.pk = os.path.join(self.tmp, "PACKET-WALK-r1.md")
         with open(self.pk, "w", encoding="utf-8") as f:
             f.write(self.text)
-        sha12 = D.sha256f(self.pk)[:12]
-        self.ledger = os.path.join(self.tmp, "ledger.md")
-        self.runs = os.path.join(self.tmp, "RUNS.tsv")
-        with open(self.ledger, "w", encoding="utf-8") as f:
-            f.write("| 1 | GO | PACKET-WALK-r1.md %s |\n" % sha12)
-        with open(self.runs, "w", encoding="utf-8") as f:
-            f.write("x\t%s\n" % self.pk)
         self.capmap = D.load(os.path.join(ROOT, "capability-map.json"))
         self.caps = D.load(os.path.join(ROOT, "caps.json"))
         ranked = [r["harness"] for r in D.route(self.text, self.capmap, self.caps)["ranked"] if r["score"] is not None]
@@ -70,7 +63,7 @@ class FailoverLease(unittest.TestCase):
     def go(self, call_fn, pin=None):
         env = {"DISPATCH_LIVE": "1", "DISPATCH_STATE": os.environ["DISPATCH_STATE"]}
         self.assertNotEqual(os.environ.get("DISPATCH_LIVE"), "1")
-        return LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps,
+        return LV.run(self.pk, self.capmap, self.caps,
                       env=env, call_fn=call_fn, pin=pin)
 
     def _returning(self, statuses, seen=None, **extra):
