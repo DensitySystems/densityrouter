@@ -7,9 +7,9 @@ densityrouter by Density Systems (densitylabs.tech) - grok@densitylabs.tech - @d
 Licensed under the Apache License, Version 2.0 (see `LICENSE` and `NOTICE`).
 
 ## What it is
-densityrouter is a small, stdlib-only Python 3 router. It picks which AI coding CLI (a "harness") should run a packet (a markdown job file), checks that the packet is approved, and, only when live mode is on, sends it to that CLI and records what happened.
+densityrouter is a small, stdlib-only Python 3 router. It picks which AI coding CLI (a "harness") should run a packet (a markdown job file), and, only when live mode is on, sends it to that CLI and records what happened.
 
-Configuration comes from `densityrouter.config` plus the two data files `capability-map.json` and `caps.json` that ship next to the code; the environment variables in USAGE.md can override single values for one process. At run time it also reads the packet, the GO ledger, the RUNS file, its state dir and the harness CLIs' own `/usage` screens. It never calls into any other bot or agent.
+Configuration comes from `densityrouter.config` plus the two data files `capability-map.json` and `caps.json` that ship next to the code; the environment variables in USAGE.md can override single values for one process. At run time it also reads the packet, its state dir and the harness CLIs' own `/usage` screens. It never calls into any other bot or agent.
 
 Harnesses shipped in the example config: `grok-build` (Grok Build CLI `grok`), `cursor` (Cursor CLI `cursor-agent`), `agy-gemini` (AGY CLI `agy`). Some code paths are still specific to these three names; see "Adding a harness".
 
@@ -29,20 +29,17 @@ git clone <repo-url> densityrouter && cd densityrouter     # or unpack a release
 ## First run (offline, no calls)
 ```
 cp densityrouter.config.example densityrouter.config       # then replace every <...> you need
-mkdir -p state ledger packets                                 # state_dir, go_ledger/runs folder, packets_dir from the example
+mkdir -p state packets                                        # state_dir and packets_dir from the example
 printf '# PACKET: hello\n\nObjective: Read README.md and reply with a 3-line summary. Read-only: do not edit any file.\n' > packets/PACKET-hello.md
-S=$(sha256sum packets/PACKET-hello.md | cut -c1-12)
-printf '| 1 | GO | PACKET-hello.md %s |\n' "$S" > ledger/GO-LEDGER.md   # GO ledger format
-printf 'hello\tpackets/PACKET-hello.md\n' > ledger/RUNS.tsv            # RUNS format: any row naming the packet
 python3 dispatcher.py dispatch packets/PACKET-hello.md --dry-run; echo "exit=$?"
 ```
-Expected: JSON with `"status": "WOULD DISPATCH (dry-run, nothing sent)"`, `"task_type": "research"`, then `exit=0`. Before any usage snapshot exists it also prints `No usage snapshots: routing by ability only (U = 0.3 default)`. Editing the packet changes its sha12, so the GO line must be redone.
+Expected: JSON with `"status": "WOULD DISPATCH (dry-run, nothing sent)"`, `"task_type": "research"`, then `exit=0`. Before any usage snapshot exists it also prints `No usage snapshots: routing by ability only (U = 0.3 default)`.
 
 ## The config
-`densityrouter.config` is JSON and the single reference for every real location (state, ledger, RUNS, usage and packet folders, LAN schema), every host, and every harness. It is git-ignored; the repo ships `densityrouter.config.example`.
+`densityrouter.config` is JSON and the single reference for every real location (state, usage and packet folders, LAN schema), every host, and every harness. It is git-ignored; the repo ships `densityrouter.config.example`.
 - Lookup: `$DENSITYROUTER_CONFIG` (must exist), else `densityrouter.config` next to the code. If neither exists the router stops with `CONFIG MISSING` (exit 9). The `.example` is never used silently.
 - Relative paths resolve under the code folder; `~` expands to the home of the user running the router.
-- `paths`: `state_dir`, `go_ledger`, `runs`, `usage_dir`, `packets_dir`, `ip_schema`.
+- `paths`: `state_dir`, `usage_dir`, `packets_dir`, `ip_schema`.
 - `lan.harness`: the only harness allowed for LAN work. Unset = LAN work routes nowhere (HOLD).
 - `harnesses.<name>`: `route`, `bin`, `bin_env` + `allow_bins`, `invoke` and `request_argv` (`{bin}` and `{prompt}` are filled in), `timeout_s`, `async`, `pool`, `usage` (`parser`, `primary`, `reader_cwd`), `run_host`.
 - Label-only keys (shown in output, never change routing): `owner`, `off`, `account`, `subscription`, `desktop_only`, `host`, `route_via`, `usage.source`, `usage.report_step`. For the `host` / `route_via` labels shown in route output, `capability-map.json` wins over the config. Where a CLI actually runs is decided only by `run_host` (local, or ssh to `run_host.host`); `desktop_only` and `host` never affect it.
@@ -71,7 +68,7 @@ Retryable (the router falls back to the next candidate): `failed_retryable`, `ti
 ## Files
 | file | role |
 |---|---|
-| `dispatcher.py` | routing, hard rules, leases, GO/RUNS checks, redaction, CLI |
+| `dispatcher.py` | routing, hard rules, leases, redaction, CLI |
 | `live.py` | live caller (offline unless live is on) |
 | `harness_call.py` | runs one harness CLI with timeout, exit mapping, redaction |
 | `usage_layer.py` | `/usage` reads and parsers, usage ledger, rollups |
@@ -140,7 +137,7 @@ Parser contract: `parse(text, now) -> {pool_name: {"used_pct" or "remaining_pct"
 ```
 for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done
 ```
-Or all at once: `python3 -m unittest discover -s tests` (expected: `Ran 286 tests`, `OK`). Each suite prints `Ran N tests` and `OK`; no `FAIL` lines, no skips. The suite forces `DENSITYROUTER_CONFIG` to `tests/fixtures/test.config`, where every CLI is `/bin/false`, so an exported real config is ignored. Tests use temp state and fake CLIs only; they make no real calls.
+Or all at once: `python3 -m unittest discover -s tests` (expected: `Ran 295 tests`, `OK`). Each suite prints `Ran N tests` and `OK`; no `FAIL` lines, no skips. The suite forces `DENSITYROUTER_CONFIG` to `tests/fixtures/test.config`, where every CLI is `/bin/false`, so an exported real config is ignored. Tests use temp state and fake CLIs only; they make no real calls.
 
 ## Known limits
 - Throttle is not built: `THROTTLE_PCT = None`; usage never slows or blocks a request. Health cooldown is unset.

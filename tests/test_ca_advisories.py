@@ -74,13 +74,6 @@ class LiveCwdAndWalk(unittest.TestCase):
         self.pk = os.path.join(self.tmp, "PACKET-CA-r1.md")
         with open(self.pk, "w", encoding="utf-8") as f:
             f.write(TEXT)
-        sha12 = D.sha256f(self.pk)[:12]
-        self.ledger = os.path.join(self.tmp, "ledger.md")
-        self.runs = os.path.join(self.tmp, "RUNS.tsv")
-        with open(self.ledger, "w", encoding="utf-8") as f:
-            f.write("| 1 | GO | PACKET-CA-r1.md %s |\n" % sha12)
-        with open(self.runs, "w", encoding="utf-8") as f:
-            f.write("x\t%s\n" % self.pk)
         self.capmap = D.load(os.path.join(ROOT, "capability-map.json"))
         self.caps = D.load(os.path.join(ROOT, "caps.json"))
         self._hc_run = HC.subprocess.run
@@ -112,7 +105,7 @@ class LiveCwdAndWalk(unittest.TestCase):
     def _live(self, call_fn, pin=None):
         env = {"DISPATCH_LIVE": "1", "DISPATCH_STATE": self.tmp}
         self.assertNotEqual(os.environ.get("DISPATCH_LIVE"), "1")
-        rc, out = LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps,
+        rc, out = LV.run(self.pk, self.capmap, self.caps,
                          env=env, call_fn=call_fn,
                          pin=pin)
         return env, rc, out

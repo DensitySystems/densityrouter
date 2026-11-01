@@ -92,7 +92,7 @@ class _async_read:
             return {"harness": self.h, "parse_ok": False, "state": "read_failed", "error": "timeout (log-only)", "pools": {}, "primary": None}
         return self.res
 
-def run(packet, ledger, runs, capmap, caps, udir=None, env=None, call_fn=None, pin=None, reader_fn=None, session_fn=None, reap_fn=None):
+def run(packet, capmap, caps, udir=None, env=None, call_fn=None, pin=None, reader_fn=None, session_fn=None, reap_fn=None):
     """Returns (rc, out). call_fn is injectable for tests only (fake harness); defaults are real.
     Usage : reader_fn(h) defaults to usage_layer.read_usage (the CLI's own /usage) when
     call_fn is the real harness_call.call; an injected call_fn with no reader_fn records "not_read" (never a number).
@@ -111,7 +111,7 @@ def run(packet, ledger, runs, capmap, caps, udir=None, env=None, call_fn=None, p
     async and log-only; a reader that throws or times out logs parse_ok false / read_failed and the result is still written.
     Caps are not a route gate (missing, null, or 0 is no ceiling)."""
     D.check_kill()
-    ok, out, hits = D.dry_run(packet, ledger, runs, capmap, caps, udir)
+    ok, out, hits = D.dry_run(packet, capmap, caps, udir)
     out["mode"] = "live" if live_enabled(env) else "offline"
     if pin is not None:
         pok, why = check_pin(out, pin)
@@ -272,12 +272,12 @@ def main(argv=None):
         sys.exit(0)
     D.check_kill()
     ap = argparse.ArgumentParser(description="dispatcher live caller (DISPATCH_LIVE=1 to enable; default OFF)")
-    ap.add_argument("packet"); ap.add_argument("--ledger", default=D.C.path("go_ledger"))
-    ap.add_argument("--runs", default=D.C.path("runs")); ap.add_argument("--usage-dir")
+    ap.add_argument("packet"); ap.add_argument("--ledger", help=argparse.SUPPRESS)
+    ap.add_argument("--runs", help=argparse.SUPPRESS); ap.add_argument("--usage-dir")
     ap.add_argument("--harness", help="tests and operator use only: pin this harness after full checks; refusal exits 7; unset leaves routing unchanged")
     x = ap.parse_args(argv); D.check_kill()
     capmap = D.load(os.path.join(HERE, "capability-map.json")); caps = D.load(os.path.join(HERE, "caps.json"))
-    rc, out = run(x.packet, x.ledger, x.runs, capmap, caps, x.usage_dir, pin=x.harness)
+    rc, out = run(x.packet, capmap, caps, x.usage_dir, pin=x.harness)
     print(json.dumps(out, indent=1)); sys.exit(rc)
 
 if __name__ == "__main__": main()

@@ -42,13 +42,6 @@ class UsageMetering(unittest.TestCase):
         self.pk = os.path.join(self.tmp, "PACKET-METER-r1.md")
         with open(self.pk, "w", encoding="utf-8") as f:
             f.write(TEXT)
-        sha12 = D.sha256f(self.pk)[:12]
-        self.ledger = os.path.join(self.tmp, "ledger.md")
-        self.runs = os.path.join(self.tmp, "RUNS.tsv")
-        with open(self.ledger, "w", encoding="utf-8") as f:
-            f.write("| 1 | GO | PACKET-METER-r1.md %s |\n" % sha12)
-        with open(self.runs, "w", encoding="utf-8") as f:
-            f.write("x\t%s\n" % self.pk)
         self.capmap = D.load(os.path.join(ROOT, "capability-map.json"))
         self.caps = D.load(os.path.join(ROOT, "caps.json"))
         self.default_log = os.path.join(UW.DEFAULT_USAGE_DIR, "usage-log.jsonl")
@@ -74,7 +67,7 @@ class UsageMetering(unittest.TestCase):
               "reader_fn": reader}
         if pass_udir:
             kw["udir"] = self.udir
-        return LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps, **kw)
+        return LV.run(self.pk, self.capmap, self.caps, **kw)
 
     def _lines(self, path):
         with open(path, encoding="utf-8") as f:
@@ -191,7 +184,7 @@ class UsageMetering(unittest.TestCase):
         def reap(cwd, since):
             ev.append(("reap", T.time())); return [4242]
         env = {"DISPATCH_LIVE": "1", "DISPATCH_STATE": self.state}
-        rc, out = LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps, udir=self.udir, env=env,
+        rc, out = LV.run(self.pk, self.capmap, self.caps, udir=self.udir, env=env,
                          call_fn=call_fn, reader_fn=reader, reap_fn=reap)
         self.assertEqual(rc, 0)
         kinds = [k for k, _ in sorted(ev, key=lambda x: x[1])]
@@ -234,7 +227,7 @@ class UsageMetering(unittest.TestCase):
             raise AssertionError("call")
 
         env = {"DISPATCH_STATE": self.state}
-        rc, out = LV.run(self.pk, self.ledger, self.runs, self.capmap, self.caps,
+        rc, out = LV.run(self.pk, self.capmap, self.caps,
                          udir=self.udir, env=env,
                          call_fn=call_fn, reader_fn=reader)
         self.assertEqual((rc, out["mode"]), (0, "offline"))

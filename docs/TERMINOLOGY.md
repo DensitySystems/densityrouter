@@ -21,10 +21,6 @@ Use these terms, with these meanings, in code comments, user-facing strings and 
 | dry run | a run that checks and ranks but sends nothing (`dispatch --dry-run`, or `live.py` while live is off) |
 | live | the mode in which the router calls a harness: `DISPATCH_LIVE=1` or `<state-dir>/LIVE` |
 | offline | the default mode: no calls |
-| approval | a GO ledger line naming the packet file and its sha12 |
-| GO ledger | the markdown file that holds approvals |
-| RUNS file | the TSV file that must list the packet |
-| sha12 | the first 12 hex characters of a file's SHA-256 |
 | lease | a file that marks a job as in flight so no second router takes it |
 | KILL file | the emergency stop file; every command checks it first and exits 3 |
 | usage read | one capture of a CLI's own `/usage` screen |

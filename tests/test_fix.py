@@ -8,7 +8,7 @@ import dispatcher as D, harness_call as HC
 CAP = D.load(os.path.join(ROOT, "capability-map.json")); CAPS = D.load(os.path.join(ROOT, "caps.json"))
 PY = sys.executable
 import drconfig as _C
-PK = (_C.path("packets_dir") or "") + "/"; LEDGER = _C.path("go_ledger"); RUNS = _C.path("runs")
+PK = (_C.path("packets_dir") or "") + "/"
 
 
 class FIX(unittest.TestCase):
