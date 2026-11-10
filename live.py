@@ -136,7 +136,14 @@ def run(packet, ledger, runs, capmap, caps, udir=None, env=None, call_fn=None, p
     else:
         reader = lambda h: {"harness": h, "parse_ok": False, "state": "not_read", "pools": {}, "primary": None}
     job = out["handoff"]["job"]
-    with open(packet) as f: text = f.read()
+    try:
+        text, got_sha = D.read_packet_nofollow(packet)
+    except OSError:
+        out["handoff"]["status"] = "HOLD (live: packet is not a regular file, nothing sent)"
+        return 8, out
+    if got_sha != out["handoff"].get("packet_sha"):
+        out["handoff"]["status"] = "HOLD (live: packet sha changed, nothing sent)"
+        return 8, out
     nhits = D.redact_text(text)[1]
     if nhits > 0:
         out["handoff"]["status"] = f"HOLD (live: packet has {nhits} redaction hits, refused, nothing queued)"
@@ -182,17 +189,25 @@ def run(packet, ledger, runs, capmap, caps, udir=None, env=None, call_fn=None, p
                 pre_t = _mk_read(reader, h)
             t_start = time.time()
             if sess is not None:
-                with open(packet) as f: prompt = f.read()
+                prompt = text
                 H.bump(h)
                 try:
                     crc, ctext, restarted = UL.grok_session_call(sess, prompt)
                 except Exception as ex:  # flagged, never 0
                     crc, ctext, restarted = 1, "", True
-                    ctext = "session error: %s" % type(ex).__name__
+                    ctext = type(ex).__name__
                 t_end = time.time()
                 st0 = H.exit_map(crc if crc != "timeout" else None, crc == "timeout", ctext); H.record_health(h, st0)
                 clean_txt = UL.clean_tui_reply(ctext, prompt)          # reply text without TUI noise
-                cl, _ = D.redact({"stdout": clean_txt[-4000:]})
+                if D.exact_secret_hit(clean_txt):
+                    st0 = "secret_refused"
+                    cl, _ = {"stdout": ""}, 0
+                else:
+                    try:
+                        cl, _ = D.redact({"stdout": clean_txt[-4000:]})
+                    except Exception as ex:
+                        st0 = "internal_error"
+                        cl = {"stdout": "", "error_class": type(ex).__name__}
                 res = {"harness": h, "argv0": "grok (persistent session)", "rc": crc if crc != "timeout" else None, "status": st0,
                        "secs": round(t_end - t_start, 2), "session_restarted": bool(restarted or sess.restarts != rs0),
                        "raw_screen": UL.reply_digest(ctext), **cl}
@@ -266,6 +281,15 @@ def run(packet, ledger, runs, capmap, caps, udir=None, env=None, call_fn=None, p
     return (0 if st in ("done", "PENDING") else 6), out
 
 def main(argv=None):
+    try:
+        _main(argv)
+    except SystemExit:
+        raise
+    except Exception as ex:
+        sys.stderr.write(type(ex).__name__ + "\n")
+        sys.exit(6)
+
+def _main(argv=None):
     args = sys.argv[1:] if argv is None else list(argv)
     if "--off" in args:  # before argparse: packet is not required
         print(rollback_off())

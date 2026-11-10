@@ -618,7 +618,11 @@ class GrokSession:
         os.write(self.fd, b"\r")
         done = self.pump(timeout, until=lambda t: bool(self.WORKED_RE.search(t)), mark=mark)
         if not done and not self.alive(): raise SessionDied("grok session died during the request")
-        return (0 if done else "timeout"), screen_text(bytes(self.buf[mark:]))
+        text = screen_text(bytes(self.buf[mark:]))
+        if not done:
+            self.fence()
+            return ("timeout", text)
+        return (0, text)
     def fence(self):
         """(b) after a read timed out: kill this session so a late reader cannot type into the next job; it restarts on next use."""
         self.fenced = True; self.close()
@@ -645,14 +649,26 @@ def read_session_usage(sess, now=None):
     if r.get("parse_ok"): sess.last_reading = r   # (a) a failed read is logged, never saved or reused
     return r
 
-def grok_session_call(sess, prompt, timeout=600):
-    """One router request through the persistent session. A dead session is restarted once and the call flagged."""
+def session_timeout(h="grok-build"):
+    """Seconds for one grok session request: harness timeout_s, else the 60 s default."""
+    import harness_call as HC
+    return HC.HARNESS_TIMEOUT.get(h, HC.TIMEOUT)
+
+def grok_session_call(sess, prompt, timeout=None):
+    """One router request through the persistent session. A dead session is restarted once and the call flagged.
+
+    timeout None uses session_timeout(). A timeout fences the session (process-group kill).
+    """
+    if timeout is None: timeout = session_timeout()
     r0 = sess.restarts
     try:
         rc, text = sess.ensure().ask(prompt, timeout)
     except SessionDied:
         sess.start()
         rc, text = sess.ask(prompt, timeout)
+    if rc == "timeout":
+        try: sess.fence()
+        except Exception: pass
     # a first start (restarts -1 -> 0) is not a restart; any later start inside this call is (flagged not-exact)
     return rc, text, sess.restarts > max(r0, 0)
 

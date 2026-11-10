@@ -160,5 +160,18 @@
  "ssh": {
   "_doc": "Used only by harnesses whose run_host.mode is ssh. bin: ssh client (name on PATH or absolute path).",
   "bin": "ssh"
+ },
+ "decision": {
+  "_doc": "Operational bindings the front reads. go_runs_gate required keeps today's GO and RUNS check. routing rules are not here.",
+  "go_runs_gate": "required",
+  "health.cooldown_s": null,
+  "lock_wait_s": 5,
+  "backends_verified": false,
+  "max_wait_s": 900,
+  "panel_on_ws1": "absent",
+  "enforce_install": false
+ },
+ "routing": {
+  "_doc": "Empty on purpose. The router does not read this object. Any content is refused."
  }
 }

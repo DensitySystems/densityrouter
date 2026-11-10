@@ -120,8 +120,9 @@ def bump(h):
 
 def exit_map(rc, timed_out, out):
     if timed_out: return "timed_out"
-    low = out.lower()
-    if any(q in low for q in QUOTA_HINTS): return "failed_hold:usage"
+    low = (out or "").lower()
+    # A finished reply (exit 0) is done even if it contains a quota word.
+    if rc not in (0, None) and any(q in low for q in QUOTA_HINTS): return "failed_hold:usage"
     if rc == 0: return "done"
     if rc in (124, 137, -9, -15): return "cancelled"
     if rc in (126, 127): return "failed_hold:not_installed"
@@ -212,6 +213,34 @@ def poll_async(job, now=None):
 
 def cap_label(h): c = CAPS.get(h); return f"{used(h)}/{c if c else 'none'}"
 
+_REAL_RUN = subprocess.run
+
+def _invoke(argv, timeout, cwd):
+    """Run argv. A test that replaces subprocess.run keeps that mock.
+
+    The real runner starts a new session and, on timeout, kills the process group.
+    """
+    if subprocess.run is not _REAL_RUN:
+        try:
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd, stdin=subprocess.DEVNULL, start_new_session=True)
+            return p.returncode, p.stdout or "", p.stderr or "", False
+        except subprocess.TimeoutExpired as e:
+            out = (e.stdout or b"")
+            out = out.decode() if isinstance(out, bytes) else (out or "")
+            return None, out, "", True
+    import signal
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                         cwd=cwd, start_new_session=True, text=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out or "", err or "", False
+    except subprocess.TimeoutExpired:
+        try: os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError): pass
+        try: out, err = p.communicate()
+        except Exception: out, err = "", ""
+        return None, out or "", err or "", True
+
 def call(harness, argv=None, timeout=None, cwd=None, job=None, receipt=None, packet=None):
     if timeout is None: timeout = HARNESS_TIMEOUT.get(harness, TIMEOUT)
     D.check_kill()
@@ -232,18 +261,23 @@ def call(harness, argv=None, timeout=None, cwd=None, job=None, receipt=None, pac
         return {"harness": harness, "status": "failed_hold:not_installed", "reason": f"cursor-agent missing at {argv[0]}", "agent_guard": guard}
     bump(harness); t0 = time.time(); timed_out = False
     try:
-        p = subprocess.run(C.wrap(harness, argv), capture_output=True, text=True, timeout=timeout, cwd=cwd, stdin=subprocess.DEVNULL)
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        timed_out, rc = True, None
-        out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = ""
+        rc, out, err, timed_out = _invoke(C.wrap(harness, argv), timeout, cwd)
     except FileNotFoundError:
-        rc, out, err = 127, "", "not found"
-    status = exit_map(rc, timed_out, out + err)
-    auth = "not_authed" if harness == "cursor" and rc not in (0, None) and "not logged in" in (out + err).lower() else None
+        rc, out, err, timed_out = 127, "", "not found", False
+    body = (out or "") + (err or "")
+    if D.exact_secret_hit(body):
+        status = "secret_refused"
+        out, err = "", ""
+    else:
+        status = exit_map(rc, timed_out, body)
+    auth = "not_authed" if harness == "cursor" and rc not in (0, None) and "not logged in" in ((out or "") + (err or "")).lower() else None
     record_health(harness, status)
-    clean, hits = D.redact({"stdout": out[-2000:], "stderr": err[-2000:]})
+    try:
+        clean, hits = D.redact({"stdout": (out or "")[-2000:], "stderr": (err or "")[-2000:]})
+    except Exception as ex:
+        return {"harness": harness, "argv0": os.path.basename(argv[0]), "rc": rc, "status": "internal_error",
+                "error_class": type(ex).__name__, "secs": round(time.time() - t0, 2), "calls_used": used(harness),
+                "redaction_hits": 0, "stdout": "", "stderr": ""}
     return {"harness": harness, "argv0": os.path.basename(argv[0]), "rc": rc, "status": status,
             "secs": round(time.time() - t0, 2), "calls_used": used(harness), "redaction_hits": hits, **({"agent_guard": guard} if guard else {}), **({"reason": "cursor-agent not logged in"} if auth else {}), **clean}
 

@@ -42,6 +42,45 @@ def sha256f(p):
     with open(p, "rb") as f: h.update(f.read())
     return h.hexdigest()
 
+def read_packet_nofollow(p):
+    """Read a packet that is a regular file. A symlink is refused (O_NOFOLLOW).
+
+    Returns (text, sha256 hex). OSError if the open fails.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(p, flags)
+    try:
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 16)
+            if not b: break
+            chunks.append(b)
+        raw = b"".join(chunks)
+        return raw.decode("utf-8", "surrogateescape"), hashlib.sha256(raw).hexdigest()
+    finally:
+        os.close(fd)
+
+def exact_secret_hit(text, path=None):
+    """True when a token in text hashes to a line in the secret-hash file.
+
+    The file holds sha256 hex, one per line. It does not hold the secret.
+    Missing file means no hit. This does not log the text.
+    """
+    path = path if path is not None else os.environ.get("DENSITYROUTER_SECRET_HASHES")
+    if not path or not text:
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            hashes = {ln.strip() for ln in f if len(ln.strip()) == 64}
+    except OSError:
+        return False
+    if not hashes:
+        return False
+    for tok in re.findall(r"\S+", text):
+        if hashlib.sha256(tok.encode("utf-8", "surrogateescape")).hexdigest() in hashes:
+            return True
+    return False
+
 # ---------- redaction ----------
 SHA_FIELDS = {"sha", "sha256", "packet_sha", "receipt_sha", "commit"}
 SHA_RE = re.compile(r"^(?:[0-9a-f]{12}|[0-9a-f]{64})$")
@@ -641,6 +680,13 @@ def route(text, capmap, caps, udir=None, health=None, job=None, now=None, cooldo
     if from_file:
         health_recs = read_health()
         n = HEALTH_COOLDOWN_S if cooldown_s is None else cooldown_s
+        if cooldown_s is None and n is None:
+            try:
+                cfg_n = (C.load().get("decision") or {}).get("health.cooldown_s")
+                if cfg_n is not None and not isinstance(cfg_n, bool):
+                    n = int(cfg_n)
+            except (TypeError, ValueError):
+                n = None
         health_now = time.time() if now is None else now
         health_gap = HEALTH_GAP if (n is None and _health_has_failure(health_recs)) else None
     else:
