@@ -1,293 +1,319 @@
-# Hybrid scripted design (candidate)
+# Hybrid scripted design — final plan
 
-Candidate for a critical-analysis review. Plan only. Nothing here is merged, deployed, or turned live.
+Plan only. Draft PR #2. Nothing here is merged, deployed, or turned live.
 
-This file does not repeat the seat plan `PLAN-DENSITYROUTER-LB-ACTIVATION-20261110` or the runtime receipt `DENSITYROUTER-LB-ACTIVATION-RUNTIME-20261110`. Those stay the evidence for what ws1 is doing. This file is the repo-side candidate: the API, the decision script, and the places the seat plan and this repo disagree. Step 1, what the code does today, stays in [lb-activation-assessment.md](lb-activation-assessment.md).
+This revision answers three REVISE reviews (Critical Analyst, Network Architect, Cybersecurity Analyst) and the seat plan addendum of 2026-11-10 16:15 CST. The seat plan and the runtime receipt are not copied. Step 1, what public `main` does today, stays in [lb-activation-assessment.md](lb-activation-assessment.md).
 
-Direction this candidate is built to:
+The guarantee is **at-most-once per `job_id`**. It is not exactly-once. A timed-out CLI may still finish on its account until phase 1 lands. None of the three CLIs accepts an idempotency key.
 
-- Grok Build is the front. It executes a script. It does not choose a harness on the fly.
-- Grok Bot is a caller. The harness key `grok-bot` stays `route: false`, with no invoke path and no pool. The seat plan left that as an open ruling. The later direction (Grok Bot asks where a job would go, and may also send a job) selects caller, not pool. Putting `grok-bot` into the ranked set still needs a separate yes. This candidate does not do it.
-- No throttle. No local model tier. No new routing formula. `THROTTLE_PCT` stays `None`.
+## 1. Grok Build
 
-## 1. What already exists in this repo
+Grok Build, in this plan, is one fixed program: `dr-front`. It is not an LLM seat, not `grok-build-cli.service`, and not the routed harness named `grok-build`.
 
-### 1.1 Central config
+Its role is to run the decision order in section 6 and then stop. It has no free-text arguments and no model step. Every decision point is a branch in that program.
 
-There is one config system. `drconfig.py` calls it the one place for paths, hosts, and harnesses.
+Entry points, and no others:
 
-| What | Where | What it does today |
+| Call | Who invokes it | What it does |
 |---|---|---|
-| Loader | `drconfig.py` lines 1–11, 26–33, 40–46 | `$DENSITYROUTER_CONFIG`, else `densityrouter.config` beside the code. Missing file exits 9. The `.example` is never loaded silently. Keys whose names start with `_` are comments. Cache key is path, mtime, size. |
-| Harness list | `drconfig.py` lines 59–67 | `harnesses()` keeps file order. `routed()` is `route: true` only. That list is the fallback order. |
-| Path and env overrides | `drconfig.py` lines 54–57 and 10–11 | `paths.<key>` from the file. `DISPATCH_STATE`, `DISPATCH_IP_SCHEMA`, `DISPATCH_USAGE_DIR`, `USAGE_LEDGER`, `GROK_BUILD_BIN`, `CURSOR_AGENT_BIN` win for one process when set. |
-| Template | `densityrouter.config.example` | Ships the key names. Real values stay in the gitignored config. |
-| Ability data | `capability-map.json` | Numbers per harness per task type. Not a rules file. `dispatcher.route` reads them as A. |
-| Cap labels | `caps.json` | `enabled`, `used_today`, caps. `dispatcher.py` lines 30–31 and the route comment at lines 651–654: `enabled` is not a balancer flag and caps are not a skip. |
-| Live, kill, state | `dispatcher.py` line 20; `live.py` lines 17–26 | `DISPATCH_LIVE=1` or `<state-dir>/LIVE`. KILL is `$DISPATCH_KILL` or `<code-dir>/KILL` (line 20), not a file under the state dir. |
-| Cooldown and throttle | `dispatcher.py` line 583; `usage_layer.py` line 27 | Both constants are `None`. Nothing in the config file sets them. |
-| Imported once | `dispatcher.py` line 23; `usage_layer.py` lines 30–33 | `FALLBACK`, pools, and parsers are fixed at import. A long-lived process keeps them until restart. |
+| `route` | the intake, or a person on ws1 | dry run |
+| `dispatch` | the intake, or a person on ws1 | claim, then a detached walk |
+| `subscribe` | the same caller | output after `after_sequence` |
+| `doctor` | a person on ws1 | one-shot report, no job |
 
-The seat plan's deploy and config-carry steps stay in that plan. This candidate adds one file the loader does not know yet: `decision-script.json`, pointed at by a new `paths.decision_script` key and overridden by `DISPATCH_DECISION_SCRIPT`. It is not a second config system. `drconfig.load` remains the loader. The new file holds decision bindings only. The validator rejects score weights, task-type keywords, `route` flips, cap numbers, a throttle, and a local-model harness. Routing rules stay unwritten. Jonathan's later edits are data in that file, checked against a closed list.
+The intake is the SSH forced-command in section 5. A local person uses the same binary. Grok Bot does not SSH to `live.py`.
 
-### 1.2 Human interface
+The headless `grok agent` service and the `grok-build` harness share one CLI login. They do not share a lock today. Phase 3 puts both under the same per-account `flock`, or stops the headless service before LIVE. That choice is Jonathan's.
 
-This repo has no panel module, no HTTP server, and no listening socket. A search of the Python sources finds CLIs only (`dispatcher.py` line 729, `live.py` line 274, `usage_layer.py` line 718, `usage_writer.py` line 333).
+## 2. API
 
-| Surface | Where | What a person gets today |
-|---|---|---|
-| Rank, no call | `dispatcher.py` lines 732 and 747–752 | `route-choose <packet>` prints the route JSON. It does not read the GO ledger. If every usage snapshot is missing it also prints `PHASE1_NOTE` and a precedence line before the JSON. |
-| Dry run | `dispatcher.py` lines 733–734 and 753–757 | `dispatch --dry-run` runs `dry_run` (lines 712–723). On this `main` that requires a GO line and a RUNS row. Exit 0 or 2. It never calls a CLI. |
-| Live call | `live.py` lines 268–281; `dispatcher.py` lines 736–761 | `live.py <packet>` or `dispatcher.py live`. JSON on stdout, exit code on the process. `--harness` pins and disables the walk. |
-| Live off | `live.py` lines 28–42 and 270–272 | `--off` removes `<state-dir>/LIVE`. It does not unset `DISPATCH_LIVE`. |
-| Who owns a harness | `dispatcher.py` lines 30–31 and 762–763 | `adapters` prints owner and off-switch labels, and the KILL path. |
-| One usage screen | `usage_layer.py` lines 720–726 | `read <harness>` types `/usage` and does not send a model prompt. `run` calls one named harness and skips the walk. `rollup` prints totals. |
-| Snapshots | `usage_writer.py` lines 333–347 | `record` and `snapshot` write the usage files the ranker reads. |
-| Call log | `dispatcher.py` lines 219–220 | One `dispatch.log` line per live attempt: job, harness, start, end, before, after. |
-| Docs | `README.md`, `USAGE.md` | The operator text for the same commands. |
-
-The panel a person would open is not in this repo. The seat plan measured one user unit, `densityrouter-panel-tunnel.service`, forwarding port 8941 to core-a, crash-looping since 2026-10-31, and no `panel.py` process. The v02 tree on ws1 holds `panel.py`, `panel.html`, and `densityrouter.defaults.json`, and it is not the live tree. The seat plan's step 2 recommends leaving that panel out of activation.
-
-This candidate does not follow that recommendation, and it does not replace the panel. Routing and submit do not wait on the tunnel (the seat plan is right that the tunnel blocks the panel, not the CLI). The human interface to keep is that unit plus those v02 files. Extending them means: they read the same audit log as the CLI, and a validated save of `decision-script.json` is the only edit they offer. No free-text harness picker. Bringing the v02 files into the repo is the seat plan's drift reconcile, with the panel included instead of dropped. Until those files are in the repo there is nothing here to patch. G6 (repair or disable the unit) stays a yes. This candidate does not restart the unit and does not bind a new port.
-
-`route-choose` is the advisory call Grok Bot can make today. `live.py` is the send. Neither one streams.
-
-## 2. T3 Code
-
-Read for this candidate:
-
-- Product page: [https://t3.codes/](https://t3.codes/)
-- Repository: [https://github.com/pingdotgg/t3code](https://github.com/pingdotgg/t3code)
-- Architecture: [https://github.com/pingdotgg/t3code/blob/main/docs/internals/overview.md](https://github.com/pingdotgg/t3code/blob/main/docs/internals/overview.md)
-- Command idempotency: [https://github.com/pingdotgg/t3code/blob/main/docs/orchestration-v2/README.md](https://github.com/pingdotgg/t3code/blob/main/docs/orchestration-v2/README.md)
-- Session and event model: [https://github.com/pingdotgg/t3code/blob/main/docs/orchestration-v2/core-graph-and-data-model.md](https://github.com/pingdotgg/t3code/blob/main/docs/orchestration-v2/core-graph-and-data-model.md)
-- Subscribe cursor: `OrchestrationSubscribeThreadInput` in [packages/contracts/src/orchestration.ts](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/orchestration.ts) (`afterSequence` replays, then live events; the client dedupes by sequence)
-
-Borrowed, and only this:
-
-1. Execution stays on the machine that owns the workspace and the CLI logins. A remote caller does not bring its own filesystem or credentials. From `docs/internals/overview.md`: the remote client must not substitute its own filesystem, provider credentials, or machine state. Here that machine is ws1. Grok Bot does not run the CLIs.
-2. A dispatch commits an intent, then side effects run, then subscribers see the log. From the same overview: the orchestrator decides events without doing provider I/O; the commit of the event, the receipt, and the outbox is one transaction; subscribers are notified after that commit; an acknowledgement means the intent was stored, not that the provider finished.
-3. The same command id returns the stored receipt and does not run the provider again. From `docs/orchestration-v2/README.md`: duplicate command ids return the same receipt-backed result without re-running provider side effects.
-4. `subscribe` takes `after_sequence` and replays, then follows. From the contract: when `afterSequence` is set, the server skips the snapshot and replays events after that sequence before live events.
-5. A session handle is durable metadata (which harness, which cwd, status), not the live process. From `core-graph-and-data-model.md`: `ProviderSession` is durable metadata; the process can die and be recreated; raw provider frames are not the durable event. Here the durable event is the redacted status row. The TUI screen is not the audit log.
-
-Not borrowed: the Node server, WebSocket RPC, Effect, Electron and mobile clients, git checkpoints, mid-thread model switching, Tailscale, a token broker, and a database. This repo is stdlib Python. A JSONL file is not their transaction. Section 12 states that gap.
-
-Their product page describes one surface over Claude Code, Codex, Cursor, Grok, and others, using each tool's own subscription. That matches "each CLI, own account" already. It is not a design we copy past the five items above.
-
-## 3. Shape
-
-```
-Grok Bot
-  hands one job JSON to Grok Build
-Grok Build
-  execs the front script and does nothing else with the router
-front script
-  reads decision-script.json
-  route     -> dispatcher.py route-choose     (no live.py)
-  dispatch  -> one live.py, no --harness       (pin only on a later turn)
-  subscribe -> reads the audit log
-live.py
-  ranks, walks, returns JSON
-audit log
-  one append-only JSON object per decision
-panel (when the forwarder is actually up)
-  reads that log; does not call a CLI itself
-```
-
-Grok Build's rule, until the front exists and after: do not invoke `live.py` or `usage_layer.py run` itself. If the front is missing, stop and record that for Jonathan. Do not improvise a harness.
-
-The seat plan's SSH forced-command is the recommended way Grok Bot reaches that front. See section 6. The forced command runs the front, not a raw `live.py`, so `route` and `subscribe` exist on the same auth path as `dispatch`.
-
-## 4. Candidate API
-
-One job object. Three calls. No fourth verb.
+One JSON object on stdin. No second frame. No `packet_path` from the caller.
 
 ```json
 {
   "schema": 1,
-  "job_id": "0123456789abcdef",
-  "packet_sha256": "<64 hex of the packet bytes>",
-  "packet_path": "<path under the router state dir>",
-  "call": "route",
-  "intent": "start",
+  "call": "dispatch",
+  "job_id": "<16 hex from secrets.token_hex(8), never derived from the packet>",
   "session_id": null,
-  "after_sequence": null,
-  "until": null
+  "turn": 1,
+  "intent": "start",
+  "packet_b64": "<standard base64 of the packet bytes>",
+  "packet_sha256": "<64 hex>",
+  "after_sequence": 0,
+  "until": "terminal",
+  "max_wait_s": 900
 }
 ```
 
-`call` is `route`, `dispatch`, or `subscribe`. `intent` is `start` or `close` and is read only by `dispatch`. `until` is `terminal` or `session_close` and is read only by `subscribe`. A missing field that the call requires is a refusal, not a guess.
+Callers branch on `state`, not on the exit code.
 
-`route` maps to `route-choose` (`dispatcher.py` lines 747–752). It returns `would_send_to` (first ranked harness, or null), `decided_by`, `task_type`, `ranked` (harness, A, U, H, score, usage), `skipped`, `health_gap`, and `basis`. It does not take a lease and does not call a CLI. It may be repeated. Each call appends an audit row. It does not occupy the job's dispatch receipt. Allowed stdout before the JSON is only the two strings `route-choose` already prints (`PHASE1_NOTE`, and the precedence line). Any other prefix is `reply_unreadable`.
+`route` runs `dispatcher.py route-choose`. It does not claim a job and does not call a CLI. The response includes `would_send_to`, the rank fields, and, when a terminal receipt exists for that `job_id`, `dispatched_to` from the receipt. `would_send_to` is advisory: it is computed without the lease, the GO check, or LIVE. If a receipt exists, `route` still recomputes the ranking and does not overwrite the receipt.
 
-`dispatch` with `intent: start` and no `session_id` runs `live.py` once, without `--harness`. The response is the job id, a new session handle `{session_id, harness, status}`, the router exit, and the path of the result file. The harness on the handle is `call.harness` after the walk, which can differ from `would_send_to`.
+`dispatch` with `intent: start` does the claim (section 3) and returns `{job_id, session_id, state: accepted}` as soon as the intent is stored and `systemd-run --user --unit=dr-<job_id>` has accepted the unit. It does not wait for `live.py`. Output arrives on `subscribe`.
 
-`dispatch` with `session_id` set is a later turn. The script passes `--harness` of the harness stored on that session and no other. Exit 7 closes the session and does not pick a replacement.
+Each interactive turn is its own `job_id`. The same `session_id` ties the turns. `turn` is an integer, starting at 1. The idempotency key is `job_id` alone. Turn 2's packet, which the front writes, begins with one fixed line naming the previous turn's `result_path`, then the new bytes. The front does not summarize. Until a long-lived process exists, the target is a new CLI process with that file as context. TUI continuity is deferred (section 9, CA-B3).
 
-`dispatch` with `intent: close` releases the harness lock and appends `session_closed`. It does not call a CLI.
+`session_id` is 32 hex chars (`secrets.token_hex(16)`), stored with the caller key fingerprint, the harness, `created`, and expiry (30 min idle, 4 h absolute). A later call must present the same fingerprint. A mismatch or an expiry is state `bad_session` and does not consume a new id. `intent: close` releases only a lock held by that same process.
 
-`subscribe` prints audit objects for that job with `seq` greater than `after_sequence` (zero means from the start). `until: terminal` exits after the terminal event (broadcast). `until: session_close` keeps reading until `session_closed` (interactive). The panel and a dropped caller both use this. They do not open a second channel.
+`subscribe` prints audit rows with `seq` greater than `after_sequence`, then the redacted result file once the terminal row is in, after checking `result_sha256`. `until: terminal` exits on that row. `until: session_close` exits on `session_closed`. `after_sequence` greater than the last seq **at open** is state `bad_cursor`. A cursor that sits at the end and then waits is not `bad_cursor`. On `max_wait_s` the state is `subscribe_timeout` and the job id is not consumed. While waiting, if the claim lock is free, subscribe runs the same liveness test as the sweep.
 
-Today `live.py` prints one JSON document at the end (`live.py` lines 280–281). A subscribe that starts before dispatch returns sees the intent row, then silence, then a burst of attempt rows the front writes from that JSON. Chunk streaming of model tokens is not available from these CLIs. The cursor is still the right API, so a later harness that emits lines can append without a new call.
+`transport_down` is a caller-side state. SSH exit 255, or a failure of the tunnel client before a claim exists, uses this state. The same `job_id` is retried. It never consumes an id. It is not a router exit.
 
-## 5. Idempotency and the audit log
+## 3. Claim, lock, and audit
 
-`dry_run` today sets the job id to the first 16 hex chars of SHA-256 of `packet-sha256 + ":run"` (`dispatcher.py` lines 718–719). The same bytes are the same job. After the lease is released the same bytes can be sent again.
+Two mechanisms, both required:
 
-This candidate splits those. `packet_sha256` stays on the receipt. `job_id` is 16 hex chars supplied by the caller (Grok Build mints it if the caller did not). Dispatch side effects for one `job_id` run at most once.
+1. **Claim.** stdlib `sqlite3` in WAL mode, file `state/router.db`, mode 0600. `jobs.job_id` is `PRIMARY KEY`. The insert is the atomic claim. The loser gets `in_flight` or the stored receipt. `events.seq` is `INTEGER PRIMARY KEY AUTOINCREMENT`.
+2. **Lock.** The detached worker holds `fcntl.flock` on `state/jobs/<job_id>/claim` for the whole walk. A second flock, `LOCK_EX|LOCK_NB`, on `/run/densityrouter/acct-<uid>-<harness>.lock` (root-created, 0700, tmpfs, not under `DISPATCH_STATE`) covers that CLI login. The kernel drops both locks when the holder dies. There is no pid file. `close` does not release another process's lock.
 
-The audit log is `<state-dir>/audit.jsonl`. Append only. One JSON object per line. `seq` is a decimal integer, plus one each line. Fields, and no others:
+`dp.sweep` writes `unknown_outcome` only when a non-blocking flock on the claim **succeeds** (the worker is gone) and the result file is missing or fails its sha check. If the flock fails, the state returned is `in_flight` and the id is not consumed. If the flock succeeds and `result.json` is complete, the sweep promotes that file to the terminal row instead of `unknown_outcome`.
 
-`seq`, `ts`, `dp`, `action`, `state`, `exit`, `job_id`, `call`, `notify`, `consumes`
+The result file is written by the worker to `state/jobs/<job_id>/result.json` (tmp file, fsync, `os.replace`, directory fsync) **before** the terminal row is inserted. The receipt is that row plus that file.
 
-`notify` is `none`, `caller`, `jonathan`, or `panel`. `caller` means the field is in the JSON the front prints. `jonathan` means the same line is also appended to `<state-dir>/escalate.jsonl` with no packet body. `panel` means the panel reads `audit.jsonl`. There is no mail or chat sender.
+`live.py` still computes its own id, `sha256(packet_sha + ":run")[:16]` (`dispatcher.py` lines 718–719). The audit stores that value as `router_job`. The worker also exports `DENSITYROUTER_JOB_ID` and writes the same id into the job directory, so a person can join `dispatch.log` to the audit. The CLIs do not read it.
 
-A dispatch whose receipt already exists returns that receipt and appends `dp.idempotency` with `consumes: false`. It does not call `live.py`.
+Audit row fields, and no others. The serializer rejects any other key and any value over 256 bytes:
 
-`consumes: true` is written only for a terminal outcome about that job (a finished walk, a redacted packet, a bad packet, an unknown outcome after a crash). Lock, KILL, a missing config, code drift, a missing GO line, and "backends not verified" do not consume the id. The same id can be presented again after the condition is gone. That is the seat plan's "rc 2/5/7/8 are safe to resubmit", narrowed so a finished walk is not resubmitted under the same id.
+`seq`, `ts`, `prev`, `dp`, `action`, `state`, `exit`, `job_id`, `session_id`, `turn`, `call`, `packet_sha256`, `router_job`, `harness`, `result_path`, `result_sha256`, `caller_fpr`, `notify`, `consumes`
 
-Crash rule, because a file is not T3's transaction: the front appends and fsyncs an `intent` row before `live.py`, and a terminal row after. On the next start, an `intent` with no terminal becomes `unknown_outcome`, `consumes: true`, notify Jonathan. The harness is not called again. A person who wants another try mints a new `job_id`.
+`prev` is the sha256 of the previous row's canonical bytes (`seq` 1 uses 64 zero hex digits). Append is one transaction that writes the row, then one journald record `SyslogIdentifier=densityrouter-audit` with the same bytes. Journald is the off-host copy, forwarded to the existing log host. The front checks the chain at startup. A break, a bad line, or a missing newline in the middle of a mirrored export is state `hold_audit_broken`, exit 9, notify Jonathan, and no dispatch.
 
-## 6. Transport
+`consumes: true` means a terminal row about that job: a finished walk, a redacted or refused body, `unknown_outcome`, or `secret_refused`. A hold that is about the machine (KILL, lock, offline, drift, missing GO file, unverified backends, transport) does not consume the id.
 
-| Option | What it is | Cost | Candidate |
-|---|---|---|---|
-| CLI | `python3` front with `route`, `dispatch`, `subscribe` on ws1. Stdin or a packet path. JSON and JSONL on stdout. | No port. Subscribe is a process that reads the log. A live Grok TUI dies when `live.py` exits, which is already true (`usage_layer.grok_router_session` is one process). | Use this. |
-| SSH forced-command | The seat plan's intake: one key whose command is only the front, with no pty and no forwarding. Grok Bot sends the job JSON on stdin. | No new port. The key line is an access change and needs a yes. This doc does not copy the command or the host. | Use this as the caller path, once the front exists. The forced command is the front's three calls, not raw `live.py`. |
-| Local socket | A long-lived process on ws1, filesystem socket, same three calls. | Holds a TUI across turns. A supervisor is new. Still no network. | Not in the first build. Open question 4. |
-| HTTP on ws1 | Something bound on 8941, which is the port the panel forwarder already uses. | A listener is a network change. Nothing listens there today. Auth for HTTP does not exist; the CLI's trust boundary is the OS user. | Do not add one. The panel, when it is running, is the only program on that port, and it serves the existing UI plus a read of the audit log. |
+Window after the intent is stored and before the worker starts: if `systemd-run` fails and the unit is not active, the front deletes the claim and the id is not consumed. If the worker dies after the intent and before `live.py` starts, the sweep's `unknown_outcome` consumes the id and nothing ran. That is the at-most-once case.
 
-`usage_layer.py run` stays a manual one-harness tool. The front does not call it.
+Direct use of `live.py`, bypassing the front, is outside this claim. `lease_acquire` treats the same harness owner as re-entrant (`dispatcher.py` around the owner check near line 90). Two direct processes can both hold that lease. The front's claim is what covers the intake.
 
-## 7. Decision script
+## 4. Central config
 
-The front loads `decision-script.json` first. Invalid file: exit 9, state `config_invalid`, no call. These ids cannot be rebound: `dp.config`, `dp.kill`, `dp.secret`, `dp.drift`, `dp.entry`, `dp.idempotency`, `dp.sweep`. A `rules` entry may rebind only an id marked overridable, and only to an action listed on that row. Unknown keys are invalid.
+One file, the one `drconfig.py` already loads (lines 1–11 and 26–46): `densityrouter.config`, or `$DENSITYROUTER_CONFIG` for a non-intake run.
 
-Defaults the validator accepts (routing keys are absent on purpose):
-
-- `schema`: 1
-- `go_runs_gate`: `required` (this `main` and ws1). `off` only after PR #1 is merged and the deployed tree is that commit.
-- `health.cooldown_s`: null
-- `lock_wait_s`: 5
-- `backends_verified`: false
-- `cursor_key_exposed`: true until Jonathan rotates the Cursor worker API key. The front reads the boolean. It does not read process arguments and it does not log a key.
-- `code_manifest`: sha256 of `dispatcher.py`, `live.py`, `harness_call.py`, `usage_layer.py` for the pinned commit
-- `panel.down_action`: `proceed_without_panel`
-- `rules`: `[]`
-
-```
-START
-  dp.config / dp.drift / dp.kill / dp.entry / dp.secret
-  call = route      -> dp.route -> return
-  call = subscribe  -> dp.subscribe -> return
-  call = dispatch
-      receipt exists -> dp.idempotency -> return
-      intent without terminal -> dp.sweep -> return
-      dp.offline / dp.unverified / dp.go_runs / dp.lock
-      dp.select (one live.py)
-      dp.reply
-      terminal audit row
-```
-
-`dp.panel`, `dp.caps`, `dp.schema_missing`, and `dp.cursor_key` run beside this. They do not choose a harness.
-
-Log line, one JSON object, no packet text:
-
-`{"seq":1,"ts":"<iso seconds>","dp":"dp.route","action":"route_choose","state":"advisory","exit":0,"job_id":"<id>","call":"route","notify":"caller","consumes":false}`
-
-| id | Trigger | Action | Exit / state | Notify | Consumes | Overridable |
-|---|---|---|---|---|---|---|
-| dp.entry | `call` not in the three, bad hex id, empty packet, packet path outside the state dir | refuse | 2 `hold_entry` | caller | no | no |
-| dp.secret | packet matches `dispatcher.redact_text` | refuse, do not call | 8 `redacted` | caller | yes | no |
-| dp.kill | KILL file from `dispatcher.py` line 20 exists | refuse | 3 `killed` | caller, jonathan | no | no |
-| dp.config | decision script missing or invalid | refuse | 9 `config_invalid` | jonathan | no | no |
-| dp.drift | file sha256 != `code_manifest` | refuse route and dispatch | 9 `hold_drift` | jonathan | no | no |
-| dp.route | `call` is route, KILL clear | `route-choose`. Empty rank: 2 `hold_unranked`. Else 0 `advisory` | 0 or 2 | caller | no | no |
-| dp.subscribe | `call` is subscribe | print rows with `seq` > `after_sequence`. Bad cursor: 2 `bad_cursor` | 0 or 2 | caller | no | no |
-| dp.idempotency | dispatch and a terminal row exists for this id | return the stored receipt | stored exit | caller | no | no |
-| dp.sweep | `intent` row and no terminal row | append `unknown_outcome`. Do not call | 6 `unknown_outcome` | jonathan | yes | no |
-| dp.offline | dispatch and live is off (`live.py` lines 24–26) | refuse | 2 `hold_offline` | caller | no | no |
-| dp.unverified | dispatch and `backends_verified` is false | refuse. `route` still runs | 2 `hold_unverified` | jonathan | no | no |
-| dp.go_runs | gate `required`, and `find_go` / `find_runs` miss (`dispatcher.py` lines 716–720) | refuse. Do not write a GO line | 2 `hold_go_runs` | caller, jonathan | no | no |
-| dp.go_runs | gate `off`, and the deployed `dry_run` still requires the files | refuse dispatch | 2 `hold_go_runs` | jonathan | no | no |
-| dp.go_runs | gate `off`, and PR #1's `dry_run` is what is deployed (`ok` is "ranked is non-empty") | skip this check | pass | none | no | no |
-| dp.lock | `state/locks/router` still held after `lock_wait_s` | do not start `live.py` | 5 `lock_held` | caller | no | no |
-| dp.lease | `live.py` exits 5 | return it. Do not retry | 5 `lease_held` | caller | no | no |
-| dp.select | first start, checks passed | one `live.py`, no `--harness` | router exit | caller | yes if the process returns | no |
-| dp.select | start with `session_id` | one `live.py --harness` of the stored harness only | router exit, or 7 `pin_refused` which closes the session | caller | yes | no |
-| dp.timeout | final status `timed_out` (`harness_call.exit_map`, line 122). Grok's session wait is 600 s and ignores `timeout_s` | return the walk result. Do not start a second `live.py` | 6 `retry_exhausted` if nothing later returned `done` | caller | yes | no |
-| dp.quota | final status `failed_hold:usage` (hints at `harness_call.py` line 104, applied to the reply text at line 123) | same: the walk already happened. Do not throttle | 6 `retry_exhausted` if it is the final status | caller | yes | no |
-| dp.cooldown | `health.cooldown_s` is null (`dispatcher.py` line 583) | do not skip. A failure row does not change the next ranking | pass | none | no | yes, the number only |
-| dp.cooldown | `health.cooldown_s` is a positive integer | once `route` reads it, `health_skip` drops a failure younger than N. `done` overwrites the row | pass | none | no | yes, the number only |
-| dp.reply | stdout is not the expected JSON | do not retry | 6 `reply_unreadable` | caller, jonathan | yes | no |
-| dp.reply | `done` and stdout length is 4000 (Grok session slice) or 2000 (`harness_call` slice) | return the text | 0 `done_truncated` | caller | yes | yes: `return` or `refuse` |
-| dp.reply | `done` and `redaction_hits` > 0 | return the masked text. Do not resubmit | 0 `done_redacted` | caller | yes | no |
-| dp.reply | `done` and empty stdout | do not retry | 6 `reply_empty` | caller | yes | no |
-| dp.status | final `done` | return it | 0 `done` | caller | yes | no |
-| dp.status | final `PENDING` | `subscribe` until the receipt or the pending deadline, poll every 30 s. Shipped harnesses are `async: false` | 0 while pending, 6 `stale` at the deadline | caller | yes | no |
-| dp.status | final `cancelled`, `REFUSED`, or `STALE` | stop. `cancelled` does not walk (`WALK_STATUSES`, line 587) | 6 and that status | caller; jonathan if `cancelled` or `REFUSED` | yes | no |
-| dp.status | final walk status (`failed_retryable`, `timed_out`, `failed_hold:usage`, `failed_hold:not_installed`, unpinned `NOT_DISPATCHED`) after every candidate | stop. Those statuses do walk (`live.py` lines 5–6) | 6 `retry_exhausted` | caller | yes | no |
-| dp.panel | forwarder unit not staying up, or nothing on 8941 | `proceed_without_panel`: CLI result still returns. One escalate line per outage | the dispatch's own exit | jonathan once | no | yes: `proceed_without_panel` or `refuse` |
-| dp.schema_missing | `paths.ip_schema` missing. `lan_roles` returns empty (`dispatcher.py` lines 477–492). A Hosts line then fails closed (lines 518 and 523) | log and continue. Do not invent role names | pass | jonathan once | no | yes: `log_continue` or `refuse` |
-| dp.caps | caps file sha differs from the manifest. Caps do not gate (route comment, lines 651–654) | log and continue | pass | jonathan once | no | yes: `log_continue` or `refuse` |
-| dp.cursor_key | `cursor_key_exposed` is true | one escalate line per outage. Do not print a secret. Do not change ranking | pass | jonathan once | no | yes: `notify_continue` or `refuse` |
-| dp.session_close | `intent: close` | release `state/locks/<harness>`, append `session_closed` | 0 `session_closed` | caller | yes | no |
-| dp.escalate | any row whose notify includes jonathan | the row already wrote `escalate.jsonl`. Do not write a second line in the same run | the row's exit | jonathan | the row's flag | no |
-
-Harness selection is `dp.route` and `dp.select`. The script does not sort, and it does not pass `--harness` on a first start. Interactive follow-up is the stored harness only.
-
-The seat plan's step 6 says a usage hold or a missing binary stops the walk. That does not match `WALK_STATUSES` (line 587) or `live.py` lines 5–6. This candidate follows the code: those two statuses walk; `cancelled`, `REFUSED`, and `STALE` stop; exit 6 is the finished failure, not exit 2.
-
-The seat plan's rollback says a KILL file under the state dir. `check_kill` (`dispatcher.py` lines 33–35) reads line 20's path. A state-dir KILL file does nothing unless `DISPATCH_KILL` points at it. The emergency stop stays `touch <code-dir>/KILL` or `live.py --off` for the LIVE file.
-
-## 8. G1–G9
-
-| Gap | Where it lives here | Yes still required |
+| Piece | Today | In this plan |
 |---|---|---|
-| G1 merge PR #1, or new packets stay at exit 2 | `dp.go_runs`. This candidate does not write GO lines and does not merge. | Yes, to merge or to deploy the PR head. |
-| G2 redeploy ws1 from one commit; reconcile `usage_layer.py` drift, `meter_ledger.py`, and the v02 tree | `dp.drift` plus the seat plan's step 2 and step 4. Include the panel files in that reconcile. | Yes, to merge and to deploy. A draft diff is not a yes. |
-| G3 an intake that is not a hand-written file | Section 6. The forced-command front is the intake. Writing packet bytes into `state/inbox` is that command's job. | Yes, for the key line. No, for a new port. |
-| G4 caller or pool | Section 3. Caller. `grok-bot` stays out. | The later direction selects caller. A pool change needs a separate yes. |
-| G5 re-verify parsers; one live call per backend | `dp.unverified`. `usage_layer.py read` is L1 and stays log-only. L2 is the seat plan's pinned calls. | Yes, before `backends_verified` is set true, and for every live call. |
-| G6 panel forwarder | `dp.panel`. Keep the unit. Do not restart it here. | Yes, to repair or disable it. |
-| G7 missing `paths.ip_schema` | `dp.schema_missing`. Code already fails closed on Hosts lines. | Yes, before creating the file. |
-| G8 caps mismatch and the stale host label | `dp.caps`. Labels only. | Yes, before a config write. |
-| G9 Cursor worker API key in process arguments | `dp.cursor_key`. Name only. Rotation is still open. | Yes. Independent of load balancing. |
+| Paths, harnesses, `lan`, `ssh`, `log_only_pools` | live tree, in use | unchanged. `invoke` stays the command list. |
+| `capability-map.json`, `caps.json`, `usage-schema.json` | side files. Caps do not gate (`dispatcher.py` lines 651–654) | unchanged. Hashed by the manifest. |
+| v02 `densityrouter.defaults.json` and `routing.profile` | on the v02 tree only. Not in this repo. Not on the live tree. Named profiles exist there. This plan does not copy their numbers | not deployed. Not imported. |
+| `decision` | does not exist | operational bindings, section 4.1. The router code reads these. |
+| `routing` | does not exist on the live tree | present, empty, schema-checked, **not read** by `route` or `live.py`. The slot is the mechanism. The rules stay unwritten. |
 
-## 9. Implementation and tests
+There is no second file and no `DISPATCH_DECISION_SCRIPT`. The intake ignores `DENSITYROUTER_CONFIG`, `DISPATCH_STATE`, `DISPATCH_KILL`, and `DISPATCH_IP_SCHEMA` from the environment and uses the root-owned paths in section 7.
 
-Docs only in this pull request. Later code, in order, each behind the seat plan's gate:
+### 4.1 `decision` (read by the front)
 
-1. Validator for `decision-script.json`. Tests: empty `rules` loads; a score weight, a throttle, or a `local` harness fails; a rebind of `dp.kill` fails; a rebind of `dp.panel` to `refuse` loads.
-2. Front `route` over `route-choose`, plus the audit append. Tests: GO file absent still returns a ranking; KILL exits 3 with no audit of a call; a second `route` appends a second row and does not call `live.py`.
-3. Front `dispatch` exactly-once wrapper around `live.py`, result file, session row. Tests: two dispatches of one id call the fake harness once; a different packet sha with the same id is `hold_entry` and does not call; `unknown_outcome` after a missing terminal row does not call.
-4. Front `subscribe` over the log. Tests: `after_sequence` skips older rows; `until: terminal` exits on the terminal row; a cursor past the end is exit 2.
-5. Router fixes already listed in the assessment (Grok timeout reads `timeout_s`, cooldown stays null unless set, quota hints do not fire on exit 0, full redacted reply, one router lock). Existing suites that pin `HEALTH_COOLDOWN_S is None` stay green.
-6. Panel reads the audit log, only after the v02 files are in the repo. No new UI kit.
+| Key | Default | Who may change it |
+|---|---|---|
+| `go_runs_gate` | `required` | a commit Jonathan merges. Not the panel. |
+| `health.cooldown_s` | null (matches `dispatcher.py` line 583) | the same commit. Null means no skip. |
+| `lock_wait_s` | 5 | the same commit. Expiry does not consume the id. |
+| `backends_verified` | false | the same commit, after the live checks in phase 5. |
+| `intake_daily_max` | absent | Jonathan sets the integer before the intake key exists. Absent means dispatch is refused. |
+| `max_wait_s` | 900 | the same commit. Subscribe only. |
 
-The seat plan's T1–T4 stay that plan's end-to-end checks. They run only after a yes to make live calls. This repo's current suite stays `python3 -m unittest discover -s tests` (286 tests, OK, on the step 1 commit; this step changes docs only).
+`rules` is not a free list. The only rebind the schema accepts is `panel_on_ws1` to `absent` (the default) or `loopback_readonly`. Everything else in the decision order is fixed code.
 
-## 10. OPEN QUESTIONS
+### 4.2 `routing` (not read)
 
-1. Is a direction relayed for Jonathan the same bar as the seat plan's "Jonathan's own yes" on the caller-versus-pool ruling? This candidate treats it as the caller reading and still blocks a `route: true` on `grok-bot`.
-2. Should `route` on a job id that was already dispatched return the stored decision, or a fresh ranking? This candidate recomputes `route` every time and never lets it overwrite the dispatch receipt.
-3. Is at-most-once after a crash (section 5) acceptable, or is a human replay flag required? This candidate refuses automatic replay.
-4. Is the coarse `state/locks/router` lock acceptable? It serializes every dispatch on ws1. Measured load is one real routed job. Per-harness locks would skip a busy account inside the walk, which is a selection change. Not adopted.
-5. Should `cursor_key_exposed: true` refuse dispatch to cursor? This candidate only notifies. Refusing would change who is eligible.
-6. The seat plan's risk 5 says a missing IP schema might send LAN work to other backends. `dispatcher.py` lines 518 and 523 fail closed on Hosts lines when the role set is empty. Which reading should a test lock, and is that test in scope given routing policy is out of scope?
-7. Does `subscribe` need client-to-server prompt frames, or is a later `dispatch` on the same `session_id` enough? This candidate uses another dispatch, so the call list stays three.
-8. The seat plan says leave the panel out of activation. The later direction says keep and extend it. This candidate keeps it and does not block submit on it. If "extend" means the panel must be up before LIVE, that reverses `dp.panel`'s default.
+Schema: an object that must be `{}` or absent. Any other content fails validation, exit 9, no dispatch. When Jonathan wants rules, a later change adds key names and a reader. That change is a yes of its own. The v02 profile names (density, clutch, and the others in the seat-plan addendum) are not copied in, and neither are their floors or breaker counts.
 
-## 11. RISKS
+### 4.3 Validation and integrity
 
-1. A JSONL append plus fsync is not T3's one-transaction commit. Two front processes can interleave `seq`. The router lock does not cover `route` and `subscribe`. A reviewer who wants a single writer has to add the long-lived socket (open question 4) or accept torn lines as a failure (`reply_unreadable`).
-2. Exactly-once plus the current hash job id will surprise callers. The seat plan tells the bot to resubmit after exit 2, 5, 7, or 8. After this candidate, exit 6 and exit 8 are consumed; exit 2 and exit 5 are not. A bot written to the seat plan will loop on a consumed id and get the same receipt.
-3. `dp.quota` still sees today's `exit_map`: the hint list runs on the reply body (`harness_call.py` lines 104 and 121–124). A finished answer that contains those words becomes `failed_hold:usage` and the walk continues. The assessment's fix is not in this repo yet. Shipping the front first preserves that bug.
-4. Grok's live path waits 600 s. One hung account dominates T1. The seat plan's end-to-end test will look like a hang.
-5. `backends_verified: false` blocks every direct call, including the seat plan's T1, until someone sets the flag. That is deliberate. It also means a yes to "turn LIVE on" is not sufficient.
-6. Including the v02 panel in the drift reconcile can pull in an unreviewed UI and a defaults file. Leaving it out, as the seat plan suggests, keeps activation smaller and ignores the later "keep and extend" direction.
-7. The forced-command key is a root-equivalent for "anything the router will run". After PR #1 there is no per-packet GO line. The seat plan already names this. The decision script does not invent a replacement approval.
-8. ws1 is one host. Load balancing here is across CLIs on that host. A down host is not failed over. The seat plan's risk 8 stands.
-9. Public `main` and the tree ws1 runs are different commits. `dp.drift` will refuse every call until the manifest matches the tree that is actually on disk. A manifest written from public `main` while ws1 still runs the October tree blocks activation on purpose.
-10. The Cursor worker API key is still in a process argument list on ws1, by the runtime receipt. This candidate does not rotate it, does not read it, and does not make load balancing depend on it. Treating it as in-scope work delays activation; leaving it for later leaves the exposure.
+The front refuses, exit 9 `config_invalid`, unless all of the following hold:
+
+- `densityrouter.config`, `capability-map.json`, and the manifest are owned by root, mode 0644, and `realpath` is under `/opt/densityrouter`.
+- The database and `state/` are owned by user `router`, mode 0700.
+- Unknown keys are rejected. `routing` is empty. `decision` matches the table.
+- The manifest lists the sha256 of every `.py` the front imports, the front itself, `densityrouter.config`, and `capability-map.json`. It is built from the deployed tree in CI and installed root-owned. A CLI `--version` string is written on the intent row as a log line, not as a gate.
+- Gate flags in section 4.1 change only by a commit. The panel cannot write them.
+
+A detached signature over that manifest, with the private key kept off ws1, is part of the install Jonathan approves at deploy. Until that signature verifies, the front refuses dispatch. The public half ships in the root-owned install.
+
+`paths.ip_schema` is a file on ws1, copied and refreshed by a person. The router never opens it over the network. A missing file keeps today's behavior: `lan_roles` is empty (`dispatcher.py` lines 477–492) and a Hosts line fails closed (lines 518 and 523).
+
+## 5. Transport, panel, fallback
+
+| Path | Decision |
+|---|---|
+| Caller | SSH forced-command to the existing ws1 SSH hostname. No new port. |
+| Packet | `packet_b64` inside the one JSON object. The front decodes, rejects a caller-supplied path, writes `state/inbox/<sha256>.md` with `O_CREAT\|O_EXCL\|O_NOFOLLOW` mode 0600, hashes that fd, and passes that path. A sha mismatch is `hold_entry` and consumes nothing. `live.py` re-opens with `O_NOFOLLOW` and checks the sha again. |
+| Key line | `restrict,no-user-rc,command="/opt/densityrouter/bin/dr-front",from="127.0.0.1,::1"` and one ed25519 key named by role and date. No key material in this doc. The file is a root-owned `AuthorizedKeysFile`, not a home-directory `authorized_keys`. |
+| Command string | `dr-front` ignores `SSH_ORIGINAL_COMMAND`. A non-empty value is refused. The log records the length only. |
+| Network gate | Cloudflare Access on that hostname, a policy for Jonathan, and a service token for the caller host. The key is a second factor, not the only gate. |
+| Client | `ServerAliveInterval` on subscribe. A dropped channel after `accepted` loses nothing. |
+| Panel | Bind `127.0.0.1:8941` on ws1 only, and only after the write routes are gone. Reach it with `ssh -L`. The user unit `densityrouter-panel-tunnel.service` is **disabled**, not repaired. No remote forward to any other host. |
+| Fallback | One path, for Jonathan only: the registered-machine Shell on ws1, running the same `dr-front`. Not lan-mcp. |
+| HTTP | No router HTTP. 8941 and the lan-mcp port stay loopback. A post-deploy `ss -lnt` check must show no new non-loopback listener. |
+| Local socket | Not in this plan. |
+
+Grok Bot's private key for the intake lives only on the caller host, mode 0600, and is not the interactive SSH key. Where on that host, and which agents can read it, is still unmeasured (section 11).
+
+## 6. Decision order
+
+KILL is first, matching `dispatcher.py` line 728. The root file `/etc/densityrouter/KILL` is checked, then the code path (`dispatcher.py` line 20 on public `main`; the live tree's default path is the one the seat addendum measured under the state dir). Either file stops the process, exit 3, state `killed`, before config is parsed. A missing router config, which today dies at import (`drconfig.py` lines 26–33), is caught and written as `config_invalid` when the front can still write; if it cannot, the process exits 9 with no audit row.
+
+Order for every process: `dp.kill` → `dp.config` → `dp.audit` → `dp.drift` → `dp.entry` → the call.
+
+`dp.secret` runs on `dispatch` only. `route` and `subscribe` do not consume an id because of packet text.
+
+| id | Trigger | Action | State | Consumes |
+|---|---|---|---|---|
+| dp.kill | either KILL file exists | stop | `killed` | no |
+| dp.config | config, owner, mode, or schema fails | stop | `config_invalid` | no |
+| dp.audit | chain break or bad row | stop | `hold_audit_broken` | no |
+| dp.drift | a hashed file differs, or the signature does not verify | stop | `hold_drift` | no |
+| dp.entry | bad id, missing `packet_b64`, sha mismatch, path trick | stop | `hold_entry` | no |
+| dp.secret | dispatch packet matches the redactor, or the redactor cannot run | stop | `redacted` | yes |
+| dp.idempotency | terminal row exists | return the receipt | stored state | no |
+| dp.inflight | claim exists and the flock is held | return | `in_flight` | no |
+| dp.sweep | flock is free and the result file is incomplete | one terminal row | `unknown_outcome` | yes |
+| dp.sweep | flock is free and the result file matches its sha | promote that file | the file's state | yes |
+| dp.offline | LIVE is off, or a V3 window flag file `/etc/densityrouter/V3` exists | stop | `hold_offline` | no |
+| dp.unverified | `backends_verified` is false | `route` still runs; dispatch stops | `hold_unverified` | no |
+| dp.go_runs | gate `required` and the GO line or RUNS row is missing | stop. The front does not write either file | `hold_go_runs` | no |
+| dp.go_runs | gate `off` while the deployed `dry_run` still requires the files | stop | `hold_go_runs` | no |
+| dp.lock | account flock still held after `lock_wait_s` | stop | `lock_held` | no |
+| dp.lease | `live.py` returns 5 | record it | `lease_held` | yes |
+| dp.accept | claim inserted and `systemd-run --user` accepted the unit | return to the SSH client | `accepted` | no |
+| dp.worker | the unit runs one `live.py`, no `--harness` on turn 1 | walk as the code walks today | the walk's state | yes when the terminal row is written |
+| dp.turn | `session_id` set, fingerprint and expiry match | `--harness` is the stored harness only. Exit 7 closes the session | `pin_refused` or the walk's state | yes |
+| dp.reply | result sha matches and status is `done` | subscribe prints the redacted file | `done` | yes |
+| dp.reply | exact hash of a known secret matches the result or stderr | do not print the body | `secret_refused` | yes |
+| dp.reply | stdout is not the expected JSON | store raw bytes only in a 0600 file under the job dir; do not echo them | `reply_unreadable` | yes |
+| dp.quota | final status `failed_hold:usage` after the walk | record it. No throttle | `retry_exhausted` if nothing later returned `done` | yes |
+| dp.timeout | final status `timed_out` | record it. Do not start a second walk | `retry_exhausted` if nothing later returned `done` | yes |
+| dp.status | final `cancelled`, `REFUSED`, or `STALE` | stop. Those do not walk (`dispatcher.py` line 587) | that status | yes |
+| dp.subscribe | `max_wait_s` elapsed | return | `subscribe_timeout` | no |
+| dp.close | `intent: close`, fingerprint matches, this process holds the lock | release that lock | `session_closed` | yes |
+
+`failed_hold:usage` and `failed_hold:not_installed` walk (`live.py` lines 5–6, `WALK_STATUSES` at `dispatcher.py` line 587). The seat plan's step 6 said they stop. This plan follows the code.
+
+Notify Jonathan by one journald line and one row in the audit, for `killed`, `config_invalid`, `hold_audit_broken`, `hold_drift`, `unknown_outcome`, `secret_refused`, and `hold_secret_argv`. No second log file. No mail sender.
+
+`doctor`, not a per-call branch, reports: panel unit state, caps file sha, whether `paths.ip_schema` exists, CLI version strings, and the argv scan. Those facts do not change a dispatch by themselves.
+
+## 7. Process, credentials, redaction
+
+Before LIVE, and before the intake key exists:
+
+- User `router` runs `dr-front` and owns `state/`. User `cli-grok`, `cli-cursor`, and `cli-agy` run the three CLIs. The router user cannot write their homes. They cannot write `/opt/densityrouter` or `/etc/densityrouter`.
+- Each CLI is started with a scrubbed environment (`env -i` and an allowlist: `PATH`, `HOME`, `LANG`, `DENSITYROUTER_JOB_ID`) and a writable path limited to that job directory.
+- `dr-front` starts from `os.environ.clear()` plus the same allowlist.
+- The Cursor worker API key is rotated first. The old value is treated as disclosed. The new value is never placed in argv, a unit `ExecStart`, an `invoke` template, a log, or a receipt. Delivery is systemd `LoadCredential` from `/etc/densityrouter/creds/cursor` (root, 0600), read from the credentials directory. The fallback is an `EnvironmentFile` on that worker unit only, same mode and owner. Not a shell profile.
+- The worker runs as its own user. `/proc` is mounted `hidepid=2`.
+- At startup, and again before each dispatch, the front scans readable `/proc/*/cmdline` for `--api-key`, `--token`, and `_KEY=`. A hit exits 9, state `hold_secret_argv`, and the audit line carries pid and `argv[0]` only.
+- CI fails if a template, a unit file in the repo, or a test fixture contains `--api-key`, `api_key=`, `token=`, or the same prefixes. The test uses synthetic strings, never a real key.
+- Prompt text is not put in argv where the CLI can read a file or stdin. Until that is verified per CLI (section 11), `hidepid=2` is what hides the argv that still exists.
+- umask 077. Inbox, result, database, and job directories are 0600 or 0700.
+
+Redaction fails closed. The front captures `live.py` stderr and runs it through the same redactor. A traceback is not forwarded: `live.run` is wrapped so any exception becomes exit 6, state `internal_error`, exception class only. An exact hash match against the credential store refuses the body and escalates. If the redactor itself fails, the body is not returned. The pattern list in `dispatcher.py` lines 46–57 is best-effort and is not the control. The controls are the user split, `hidepid`, and the exact-match refuse.
+
+The panel, when it is imported, has its harness write routes and its usage-refresh route removed. A test asserts those paths return 404. A read of the audit log needs no secret. Any remaining config write requires a local auth secret from `LoadCredential` and the validator in section 4. That import is not required for LIVE.
+
+## 8. What phase 1 must fix inside the walk
+
+These land in the repo before `dispatch` is allowed to run on ws1. They are the Critical Analyst's sequencing point.
+
+- Quota hints (`harness_call.py` lines 104 and 121–124) apply only when the attempt did not exit 0. A finished reply that contains those words stays `done`.
+- The Grok session uses `timeout_s` and fences itself on timeout. A timeout kills the process group, not only the direct child.
+- Until those are deployed, a timed-out attempt may still complete on its account. The at-most-once claim does not cover that duplicate.
+
+`THROTTLE_PCT` stays `None` (`usage_layer.py` line 27). No local model harness.
+
+## 9. Findings
+
+| Reviewer | ID | Disposition | Where |
+|---|---|---|---|
+| Critical Analyst | B1 | adopted | section 3: sqlite claim, flock, sweep only if the lock is free, else `in_flight` |
+| Critical Analyst | B2 | adopted | section 3: extra audit fields, result file replaced into place before the terminal row |
+| Critical Analyst | B3 | adapted | section 2: one `job_id` per turn, prior `result_path` prepended. TUI continuity deferred: it needs a long-lived process, which section 5 refuses |
+| Critical Analyst | B4 | adopted | section 5: `packet_b64`, `O_EXCL`, sha of the written fd |
+| Critical Analyst | M1 | adopted | section 3: sqlite WAL plus flock. Guarantee renamed in the header. Result file closes the "work done, row missing" window |
+| Critical Analyst | M2 | adopted | section 8, and phase 1 before any ws1 dispatch |
+| Critical Analyst | M3 | adopted | section 2: `accepted` plus `systemd-run --user`. Subscribe carries the body |
+| Critical Analyst | M4 | adopted | section 2: result sha, `max_wait_s`, `bad_cursor` only at open |
+| Critical Analyst | M5 | adopted | section 4: one file, empty `routing`, v02 profiles left out |
+| Critical Analyst | M6 | adapted | section 5 and 7: CLI stays the interface that works. Panel is read-only and loopback, write routes removed, import not required for LIVE |
+| Critical Analyst | M7 | adopted | section 1 |
+| Critical Analyst | M8 | adopted | section 6: KILL first, secret on dispatch only, branch on `state`, rows for missing config and a bad audit |
+| Critical Analyst | M9 | adopted | section 4.3: every imported `.py`, the front, the config, the capability map. CLI versions are a log line |
+| Critical Analyst | m1 | adopted | section 6: `doctor`. The exposed-key boolean is gone |
+| Critical Analyst | m2 | adopted | section 2: fresh rank plus `dispatched_to` |
+| Critical Analyst | m3 | adopted | section 3: flock held by the worker, `lock_held` is its own state |
+| Critical Analyst | m4 | adopted | phase 1 test for Hosts lines with an empty role set |
+| Critical Analyst | m5 | adopted | section 3, last paragraph: the lease hole remains for direct `live.py` |
+| Critical Analyst | m6 | adopted | section 2: `token_hex(8)`, not a hash of the packet |
+| Critical Analyst | m7 | adopted | sqlite is the store. A JSONL file is not |
+| Critical Analyst | m8 | adopted | caller-versus-pool is a gate in section 10, not a closed question. Relay does not count as Jonathan's own yes |
+| Critical Analyst | m9 | adopted | section 12 |
+| Critical Analyst | m10 | adopted | section 5: `restrict,no-user-rc,command=`, plus `from=` loopback so the key is dead on the LAN |
+| Network Architect | B1 | adopted | section 5: Access, service token, `restrict`, `from=` loopback, one dedicated key, `SSH_ORIGINAL_COMMAND` refused |
+| Network Architect | B2 | adopted | section 2 and phase 2 test: kill the SSH client after `accepted`; the unit still writes the terminal row |
+| Network Architect | M1 | adopted | section 5: disable the reverse-tunnel unit. Panel is loopback plus `ssh -L` |
+| Network Architect | M2 | adapted | section 10 phase 3: ws1 address persistence is a network task. The tunnel unit is disabled rather than re-measured as a repair. The crash-loop stops because the unit is disabled |
+| Network Architect | M3 | adopted | section 2 `transport_down`; section 6 `dp.offline` for a V3 flag file; section 5 fallback |
+| Network Architect | m1 | adopted | phase 1 test: route and dispatch open no lab socket |
+| Network Architect | m2 | adopted | section 4.3: schema file is local |
+| Network Architect | m3 | adopted | section 5 and the post-deploy `ss` check |
+| Network Architect | m4 | adopted | section 3 and 6: one walk at a time; `lock_held` does not consume |
+| Network Architect | m5 | adopted | section 10: key rotation before the intake key and before LIVE |
+| Cybersecurity Analyst | B1 | adopted | section 7. The boundary does not exist until phase 3. LIVE waits on that phase |
+| Cybersecurity Analyst | B2 | adopted | section 5. Key possession as approval is a written yes in section 10 |
+| Cybersecurity Analyst | B3 | adopted | section 7. Rotation before LIVE. Startup scan replaces the boolean |
+| Cybersecurity Analyst | M1 | adopted | section 3 per-account flock outside `DISPATCH_STATE`. Shared grok login stated in section 1 |
+| Cybersecurity Analyst | M2 | adopted | section 4.3 |
+| Cybersecurity Analyst | M3 | adopted | section 3: `prev`, flock not required for sqlite's transaction, journald mirror, startup chain check. The 256-byte value cap is in the field list |
+| Cybersecurity Analyst | M4 | adopted | section 7: fail closed, stderr captured, class-only errors |
+| Cybersecurity Analyst | M5 | adopted | section 2: 128-bit id, fingerprint, expiry |
+| Cybersecurity Analyst | M6 | adopted | section 5 and 7: write routes deleted, auth if a write remains, tunnel disabled |
+| Cybersecurity Analyst | M7 | adopted | section 5 framing |
+| Cybersecurity Analyst | m1 | adapted | section 7: file or stdin where the CLI allows it. `hidepid=2` covers argv that remains. Which CLIs allow it is unmeasured |
+| Cybersecurity Analyst | m2 | adopted | section 7: cleared environment |
+| Cybersecurity Analyst | m3 | adopted | section 6: `/etc/densityrouter/KILL` first |
+| Cybersecurity Analyst | m4 | adopted | section 7: umask 077 |
+| Cybersecurity Analyst | m5 | adopted | section 4.1: no security rebind. The boolean is gone |
+| Cybersecurity Analyst | m6 | adopted | section 6 `dp.reply` quarantine |
+| Cybersecurity Analyst | m7 | adopted | `caller_fpr` on every audit row |
+
+Nothing in the three reviews is left without a row.
+
+## 10. Phases and gates
+
+A draft in the repo is not a yes. Merge, deploy, LIVE, a live model call, a network change, a Cloudflare change, a key, and a host change are Jonathan's own yes. A relayed note is not that yes.
+
+| Phase | Work | Gate |
+|---|---|---|
+| 0 | Ruling: Grok Bot is a caller, and the `grok-bot` harness stays out of the pool. If the answer is that it becomes a pool, this plan stops. Written ruling: after the GO gate is gone, possession of the intake key is the approval. Set `intake_daily_max`. | **Jonathan: ruling, in writing** |
+| 1 | In repo, before any front dispatch: section 8 (quota, Grok timeout, process group), fail-closed redaction, stderr capture, class-only errors, `O_NOFOLLOW` sha recheck, Hosts-line test, no-lab-socket test, CI secret grep. | Draft is ordinary review. **Jonathan: merge to `main`** |
+| 2 | In repo: `dr-front`, sqlite claim, flocks, `packet_b64`, detached `systemd-run --user`, subscribe, hash-chained audit, manifest check, decision order. Test: kill the client after `accepted` and still get one terminal row. | Draft is ordinary review. **Jonathan: merge to `main`** |
+| 3 | On ws1, before LIVE and before the intake key: user split, scrubbed CLI env, `hidepid=2`, `LoadCredential`, root-owned `/opt/densityrouter` and `/etc/densityrouter/KILL`, rotate the Cursor worker API key, disable `densityrouter-panel-tunnel.service`, persist ws1's lab address, Cloudflare Access plus the service token, install the forced-command line. | **Jonathan: host change, secret, service change, network, Cloudflare.** Rotation is before LIVE and before the intake key |
+| 4 | Deploy one pinned tree to a new directory, manifest from that tree, local `ip_schema` copy, state carried only by a separate decision, new tree **LIVE off**, `doctor`, `ss -lnt` shows no new non-loopback listener. | **Jonathan: deploy and router-config write** |
+| 5 | L0 and L1 reads (bin `--version`, `usage_layer.py read`). Then one pinned live call per backend. Then LIVE on. Then the seat plan's end-to-end checks. | **Jonathan: live calls, then the live switch** |
+| 6 | Panel sources imported read-only, write routes already deleted, loopback plus `ssh -L` only. | **Jonathan: router deploy.** Not required for phase 5 |
+
+Phase 3's address persistence is a network task. It is not a densityrouter code change. The named tunnel is outbound from ws1, so a later address change does not by itself move the SSH hostname. LIVE stays off for any window that changes ws1's port, VLAN, or address (`/etc/densityrouter/V3`).
+
+The seat plan's symlink swap, rollback (`live.py --off` removes the LIVE file; it does not unset `DISPATCH_LIVE`), and T1–T4 remain that plan's runbook. Two corrections stand: KILL is not created only under the state dir (section 6), and a usage hold walks (section 6).
+
+## 11. Unmeasured, not guessed
+
+These stay open because the reviews named them and this plan did not measure them:
+
+- OpenSSH version on ws1, and the current `PermitUserEnvironment`, `AcceptEnv`, `ExposeAuthInfo`, and `AuthorizedKeysFile`.
+- Whether `/proc` already uses `hidepid`.
+- Who holds the Cursor worker unit, and whether `cursor-agent` on the router uses the same credential.
+- Whether `cursor-agent -p --trust` and `grok -p` on the installed versions can run a shell.
+- Whether the router user can sudo.
+- Which processes on the caller host will be able to read the intake private key.
+- The Cursor key's text shape. The CI grep uses synthetic prefixes only.
+
+## 12. Residual risks
+
+These are expected. No new gate is added for them.
+
+- ws1 is one host. Load balancing is across CLIs on that host. If ws1 or the tunnel is down, the caller sees `transport_down` and retries the same id. There is no second router.
+- One intake key. Loss or theft is a full dispatch right until the key line is removed and the Access token is revoked.
+- The audit database is local. The journald mirror is the copy the router user cannot edit after it has left the box. A mirror that is down does not by itself block dispatch; a chain break on the local database does.
+- ws1 power loss can still leave a claim with no result. The sweep then consumes the id as `unknown_outcome` if the worker is gone. That is at-most-once, not a silent second run.
+- The headless grok service and the `grok-build` harness share a login until phase 3 separates them or stops one.
+- Redaction patterns do not catch a secret that was split or re-encoded. The refuse path catches an exact hash. Anything else can still leave the box inside a model reply. The user split is what limits how the model got the secret.
+- v02's panel, if imported without the deletions in section 7, writes config. Phase 6 is the only import path, and it is after those deletions.
+- Public `main` and the tree on ws1 are different commits. `dp.drift` refuses dispatch until the manifest matches the tree that was actually installed.

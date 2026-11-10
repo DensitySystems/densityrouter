@@ -14,7 +14,7 @@ On current `main`, a Grok Bot on the same machine can complete a call by writing
 
 [PR #1](https://github.com/DensitySystems/densityrouter/pull/1) (drop the GO-ledger and RUNS-row refusal) is open and unmerged. Turning the balancer on does not depend on it. A client that sends a packet and expects a harness call without those two files does depend on it. See [PR #1](#pr-1).
 
-Step 2 is a candidate for review, not an adopted build: [hybrid scripted design](hybrid-scripted-design.md). It puts Grok Build in front of `live.py` and specifies one job format with three calls (`route`, `dispatch`, `subscribe`). This file stays the code assessment of what the router does today.
+The final plan, revised after three REVISE reviews, is [hybrid scripted design](hybrid-scripted-design.md). This file stays the code assessment of what the router does today.
 
 ## Current state
 
@@ -338,4 +338,4 @@ Later implementation steps re-run that command and add the tests named in the st
 
 ## What this branch does not do
 
-No change to `dispatcher.py`, `live.py`, `harness_call.py`, `usage_layer.py`, or config. No throttle. No local model harness. No shared pool. No HTTP server. No merge of PR #1. No deploy. Live mode stays off unless an operator sets it outside this branch. The step 2 candidate in [hybrid scripted design](hybrid-scripted-design.md) is docs only on this same branch. It is written for a critical-analysis review. It does not adopt a transport or merge PR #1.
+No change to `dispatcher.py`, `live.py`, `harness_call.py`, `usage_layer.py`, or config. No throttle. No local model harness. No shared pool. No HTTP server. No merge of PR #1. No deploy. Live mode stays off unless an operator sets it outside this branch. The final plan in [hybrid scripted design](hybrid-scripted-design.md) is docs only on this same branch. It does not merge PR #1, deploy, or turn live on.
