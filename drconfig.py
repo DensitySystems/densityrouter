@@ -69,6 +69,55 @@ def routed():
 def setting(section, key, default=None):
     return (load().get(section) or {}).get(key, default)
 
+# Operational bindings. routing is a slot only: empty until a later change adds a reader.
+DECISION_KEYS = {
+    "go_runs_gate": "required",
+    "health.cooldown_s": None,
+    "lock_wait_s": 5,
+    "backends_verified": False,
+    "max_wait_s": 900,
+    "panel_on_ws1": "absent",
+    "enforce_install": False,
+}
+
+class ConfigInvalid(ValueError):
+    pass
+
+def decision(data=None):
+    """Merged decision block. Unknown keys are refused. Defaults match current behaviour."""
+    raw = (data if data is not None else load()).get("decision") or {}
+    if not isinstance(raw, dict):
+        raise ConfigInvalid("decision")
+    unknown = [k for k in raw if k not in DECISION_KEYS]
+    if unknown:
+        raise ConfigInvalid("decision")
+    out = dict(DECISION_KEYS)
+    out.update(raw)
+    if out["go_runs_gate"] not in ("required", "off"):
+        raise ConfigInvalid("decision")
+    if out["panel_on_ws1"] not in ("absent", "loopback_readonly"):
+        raise ConfigInvalid("decision")
+    n = out["health.cooldown_s"]
+    if n is not None and (isinstance(n, bool) or not isinstance(n, int)):
+        raise ConfigInvalid("decision")
+    if isinstance(out["lock_wait_s"], bool) or not isinstance(out["lock_wait_s"], int):
+        raise ConfigInvalid("decision")
+    if isinstance(out["max_wait_s"], bool) or not isinstance(out["max_wait_s"], int):
+        raise ConfigInvalid("decision")
+    if not isinstance(out["backends_verified"], bool) or not isinstance(out["enforce_install"], bool):
+        raise ConfigInvalid("decision")
+    return out
+
+def routing_slot(data=None):
+    """The routing object. Absent or {} is valid. Any content is refused. Nothing reads it."""
+    src = data if data is not None else load()
+    if "routing" not in src or src.get("routing") is None:
+        return {}
+    r = src.get("routing")
+    if r != {}:
+        raise ConfigInvalid("routing")
+    return {}
+
 # ---------- where each harness CLI runs: local, or over ssh on a role-named host ----------
 def run_host(h):
     """harnesses.<h>.run_host: {"mode": "local"} (default) or
